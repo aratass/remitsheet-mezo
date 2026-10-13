@@ -7,7 +7,7 @@ Remitsheet is a small, open-source payout tool for anyone who pays many people a
 - **Live app:** https://aratass.github.io/remitsheet-mezo/ *(GitHub Pages, from the `docs/` folder; Mezo testnet by default)*
 - **Contract:** `0xfB87f0a4df8Fa0FBBe505BF4Af27aEEebEafA570`, the same address on Mezo testnet and mainnet (CREATE2)
 - **Testnet deployment and first receipt:** *links added after the first testnet batch*
-- **Pitch video (1 min 55 s, demo recorded on a local test chain):** [`submission/pitch-video.mp4`](submission/pitch-video.mp4) · **Deck:** [`submission/deck.pdf`](submission/deck.pdf)
+- **Pitch video (1 min 58 s, demo recorded on a local test chain):** [`submission/pitch-video.mp4`](submission/pitch-video.mp4) · **Deck:** [`submission/deck.pdf`](submission/deck.pdf)
 - **Origin:** Remitsheet started as a USDC and EURC payout tool on Arc ([aratass/remitsheet](https://github.com/aratass/remitsheet)). This repository is its Mezo edition: the permit flow, the Mezo Borrow credit line, MUSD, MEZO and BTC support, BTC valuation from Mezo's PriceFeed and payment request links were built for the Mezo Buildathon.
 
 ![Remitsheet for Mezo](submission/cover-1280x720.png)

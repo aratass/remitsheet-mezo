@@ -15,7 +15,7 @@ Copy each field into the AKINDO submission form. Replace every `«…»` placeho
 | Testnet or mainnet link to the live project | https://aratass.github.io/remitsheet-mezo/ |
 | Public GitHub repository | https://github.com/aratass/remitsheet-mezo |
 | Project deck | https://github.com/aratass/remitsheet-mezo/blob/main/submission/deck.pdf |
-| 2-minute pitch video | «PITCH_VIDEO_URL» (file: https://github.com/aratass/remitsheet-mezo/blob/main/submission/pitch-video.mp4, 1 min 55 s) |
+| 2-minute pitch video | «PITCH_VIDEO_URL» (file: https://github.com/aratass/remitsheet-mezo/blob/main/submission/pitch-video.mp4, 1 min 58 s) |
 
 ## Form fields
 
