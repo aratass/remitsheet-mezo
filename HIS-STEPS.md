@@ -18,16 +18,18 @@ Steps marked **[agents]** are done for you.
    - Already have a product: **yes** (Remitsheet). Based in: **Lithuania**. Continue after the hackathon: **yes**.
 3. Agree to the Terms of Participation and save.
 
-## 2. Join the Mezo Discord (2 min)
-1. Open https://discord.mezo.org and accept the invite with your Discord account.
-2. In the channel the server points new members to, write: `Hi, I'm a Mezo Buildathon participant (AKINDO, Wave 1). Could I get the Developer role, please?`
+## 2. Mezo Discord (3 min)
+**[agents]** joined the Mezo server for you on 13 Oct (with your OK). Before anyone can post there, Discord needs two checks only you can do:
+1. In Discord (Chrome or the app), open the **Mezo** server. At the bottom it says you must verify your phone: click **Patvirtink telefoną** (Verify phone) and follow the steps.
+2. In the **#verification** channel, click **Verify** and complete the captcha on captcha.bot.
+3. Tell us "discord ok". We then post: `Hi, I'm a Mezo Buildathon participant (AKINDO, Wave 1). Could I get the Developer role, please?`
 
 ## 3. Get free test BTC and MEZO (2 min)
 1. Open https://faucet.test.mezo.org/
 2. Paste your main address, solve the check, and request the coins. They arrive within a minute.
 
 ## 4. Deploy Remitsheet on Mezo testnet (3 min)
-**[agents]** first publish the code and the website (needs your OK: say "ok mezo repo").
+**[agents]** done: the code and the website are public since 13 Oct.
 1. Open https://aratass.github.io/remitsheet-mezo/#/deploy
 2. Click **Connect wallet** → **Rabby**. When the app asks, approve **adding Mezo Testnet** and switching to it.
 3. Click **Deploy on Mezo testnet** and confirm in Rabby. The fee is far below one satoshi.
