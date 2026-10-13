@@ -86,3 +86,14 @@ export function escapeCsv(value: string): string {
 export function todayLabel(): string {
   return new Date().toISOString().slice(0, 10);
 }
+
+/** 1 satoshi in 18-decimal BTC base units. */
+export const WEI_PER_SAT = 10n ** 10n;
+
+/** A BTC amount (18 decimals) as satoshis for display: "146 sats", "< 1 sat", "12,345 sats". */
+export function formatSats(value: bigint): string {
+  if (value <= 0n) return "0 sats";
+  if (value < WEI_PER_SAT) return "< 1 sat";
+  const sats = (value + WEI_PER_SAT / 2n) / WEI_PER_SAT;
+  return `${formatAmount(sats, 0, 0)} ${sats === 1n ? "sat" : "sats"}`;
+}

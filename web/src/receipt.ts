@@ -1,9 +1,9 @@
 import { getAddress, parseEventLogs, zeroAddress } from "viem";
-import { ARC_MAINNET, ARC_TESTNET, CHAINS, DEFAULT_CHAIN, LOCAL_CHAIN, NATIVE_DECIMALS, TOKEN_DECIMALS, addressUrl, devMode, supportedChain, txUrl, type ChainConfig, type Hex } from "./config";
-import { ERC20_ABI, deploymentStatus, readClient } from "./chain";
+import { CHAINS, DEFAULT_CHAIN, INPUT_DECIMALS, LOCAL_CHAIN, MEZO_MAINNET, MEZO_TESTNET, NATIVE_DECIMALS, addressUrl, devMode, supportedChain, txUrl, type ChainConfig, type Hex } from "./config";
+import { ERC20_ABI, PRICE_FEED_ABI, deploymentStatus, publicClient, readClient } from "./chain";
 import { parseSheet } from "./csv";
-import { decodeRef, escapeCsv, formatAmount, plainAmount, shortAddress, utcDate, utcTime } from "./format";
-import { centsToString, ecbUsdPerEur, eurAtParCents, eurPerUsd, usdToEurCents, type EcbRate } from "./fx";
+import { decodeRef, escapeCsv, formatAmount, formatSats, plainAmount, shortAddress, utcDate, utcTime } from "./format";
+import { centsToString, ecbUsdPerEur, eurPerUsd, usdToEurCents, type EcbRate } from "./fx";
 import { REMITSHEET_ABI } from "./generated/remitsheet";
 import { navigate, openWalletPicker } from "./main";
 import { clear, copyText, download, extLink, h, icon, storageGet, storageSet, toast } from "./ui";
@@ -25,11 +25,12 @@ export type ReceiptData = {
 };
 
 export type RecentBatch = { hash: Hex; chainId: number; timestamp: number; count: number; total: string; asset: string; ref: string };
-export const RECENT_KEY = "remitsheet:recent";
+export const RECENT_KEY = "remitsheet-mezo:recent";
 
 async function assetInfo(chain: ChainConfig, token: Hex): Promise<AssetInfo> {
-  if (token === zeroAddress) return { symbol: "USDC", decimals: NATIVE_DECIMALS, native: true, address: token };
-  if (chain.eurc && token.toLowerCase() === chain.eurc.toLowerCase()) return { symbol: "EURC", decimals: TOKEN_DECIMALS, native: false, address: token };
+  if (token === zeroAddress) return { symbol: "BTC", decimals: NATIVE_DECIMALS, native: true, address: token };
+  if (chain.musd && token.toLowerCase() === chain.musd.toLowerCase()) return { symbol: "MUSD", decimals: 18, native: false, address: token };
+  if (chain.mezo && token.toLowerCase() === chain.mezo.toLowerCase()) return { symbol: "MEZO", decimals: 18, native: false, address: token };
   const pc = readClient(chain);
   try {
     const [symbol, decimals] = await Promise.all([
@@ -85,7 +86,7 @@ export async function loadReceipt(chain: ChainConfig, hash: Hex): Promise<Receip
   }
 
   // Labels never go on-chain. They come from this browser (saved when the batch was sent) or from a CSV.
-  const saved = storageGet<string[] | null>(`remitsheet:labels:${hash.toLowerCase()}`, null);
+  const saved = storageGet<string[] | null>(`remitsheet-mezo:labels:${hash.toLowerCase()}`, null);
   if (saved && batches.length === 1 && saved.length === batches[0].lines.length) {
     batches[0].lines.forEach((l, i) => (l.label = saved[i] ?? ""));
   }
@@ -103,6 +104,29 @@ export async function loadReceipt(chain: ChainConfig, hash: Hex): Promise<Receip
   };
 }
 
+export type BtcPrice = { price: bigint; source: string };
+
+/**
+ * BTC/USD at the payment block from Mezo's PriceFeed (the oracle Mezo Borrow uses), so BTC lines and the
+ * network fee get a USD and EUR value for the day they were paid. Undefined if the feed is unavailable.
+ */
+export async function btcPriceAtBlock(chain: ChainConfig, blockNumber: bigint): Promise<BtcPrice | undefined> {
+  const feed = chain.borrow?.priceFeed;
+  if (!feed) return undefined;
+  for (const client of [readClient(chain), publicClient(chain)]) {
+    try {
+      const price = (await client.readContract({ address: feed, abi: PRICE_FEED_ABI, functionName: "fetchPrice", blockNumber })) as bigint;
+      if (price > 0n) return { price, source: `Mezo PriceFeed ${shortAddress(feed)} (BTC/USD oracle) at block ${blockNumber}` };
+    } catch {
+      // try the next client
+    }
+  }
+  return undefined;
+}
+
+const ONE = 10n ** 18n;
+const usd2 = (v: bigint) => formatAmount(v, 18, 2, 2).replace(/,/g, "");
+
 /** Accounting export: one row per payment line plus one row for the network fee. */
 export async function accountingCsv(data: ReceiptData, onlyTo?: string): Promise<{ csv: string; rateError?: string }> {
   const date = utcDate(data.timestamp);
@@ -114,41 +138,45 @@ export async function accountingCsv(data: ReceiptData, onlyTo?: string): Promise
   } catch (err) {
     rateError = `Could not load the ECB reference rate (${(err as Error).message}). EUR columns are empty.`;
   }
+  const needsBtc = !onlyTo || data.batches.some((b) => b.asset.native);
+  const btc = needsBtc ? await btcPriceAtBlock(data.chain, data.blockNumber) : undefined;
   const header = [
     "type", "date_utc", "time_utc", "network", "chain_id", "tx_hash", "block", "batch_reference", "sender", "line",
-    "recipient", "label", "asset", "amount", "eur_rate_date", "usd_per_eur", "eur_per_usd", "amount_eur", "eur_rate_source", "explorer_url",
+    "recipient", "label", "asset", "amount", "usd_price", "amount_usd", "usd_price_source",
+    "eur_rate_date", "usd_per_eur", "eur_per_usd", "amount_eur", "eur_rate_source", "explorer_url",
   ];
   const rows: string[][] = [];
   const explorer = txUrl(data.chain, data.hash) ?? "";
-  const usdEur = (amount: bigint, decimals: number) => (rate ? centsToString(usdToEurCents(amount, decimals, rate.usdPerEur)) : "");
-  const rateCols = () => [rate?.rateDate ?? "", rate?.usdPerEur ?? "", rate ? eurPerUsd(rate.usdPerEur) : ""];
+  const rateCols = rate ? [rate.rateDate, rate.usdPerEur, eurPerUsd(rate.usdPerEur)] : ["", "", ""];
+
+  /** USD price (18 decimals) and its source for one unit of an asset. */
+  const priceOf = (a: AssetInfo): { price?: bigint; source: string } => {
+    if (a.symbol === "MUSD" && !a.native) return { price: ONE, source: "MUSD valued at 1 USD (Bitcoin-backed stablecoin designed to hold 1:1)" };
+    if (a.native) return btc ? { price: btc.price, source: btc.source } : { source: "BTC price unavailable" };
+    return { source: `no USD price for ${a.symbol}` };
+  };
+  const valueCols = (amount: bigint, a: AssetInfo) => {
+    const { price, source } = priceOf(a);
+    if (price === undefined) return ["", "", source, "", "", "", "", "no EUR value without a USD price"];
+    const amountUsd = (amount * price) / 10n ** BigInt(a.decimals);
+    const eur = rate ? centsToString(usdToEurCents(amountUsd, 18, rate.usdPerEur)) : "";
+    return [usd2(price), usd2(amountUsd), source, ...rateCols, eur, rate ? rate.source : "unavailable"];
+  };
+
   for (const b of data.batches) {
     for (const l of b.lines) {
       if (onlyTo && l.to.toLowerCase() !== onlyTo.toLowerCase()) continue;
-      let eur = "";
-      let source = rate ? `${rate.source}; 1 USDC valued at 1 USD` : "unavailable";
-      let cols = rateCols();
-      if (b.asset.symbol === "EURC") {
-        eur = centsToString(eurAtParCents(l.amount, b.asset.decimals));
-        source = "EURC valued at par (1 EURC = 1 EUR)";
-        cols = ["", "", ""];
-      } else if (b.asset.native || b.asset.symbol === "USDC") {
-        eur = usdEur(l.amount, b.asset.decimals);
-      } else {
-        source = "no EUR value for this token";
-        cols = ["", "", ""];
-      }
       rows.push([
         "payment", date, time, data.chain.label, String(data.chain.id), data.hash, String(data.blockNumber), b.refText, b.sender, String(l.index + 1),
-        l.to, l.label, b.asset.symbol, plainAmount(l.amount, b.asset.decimals), ...cols, eur, source, explorer,
+        l.to, l.label, b.asset.symbol, plainAmount(l.amount, b.asset.decimals), ...valueCols(l.amount, b.asset), explorer,
       ]);
     }
   }
   if (!onlyTo) {
+    const btcAsset: AssetInfo = { symbol: "BTC", decimals: NATIVE_DECIMALS, native: true, address: zeroAddress };
     rows.push([
       "network_fee", date, time, data.chain.label, String(data.chain.id), data.hash, String(data.blockNumber), data.batches[0]?.refText ?? "", data.from, "",
-      "", "Arc network fee (paid in USDC)", "USDC", plainAmount(data.fee, NATIVE_DECIMALS, 2), ...rateCols(), usdEur(data.fee, NATIVE_DECIMALS),
-      rate ? `${rate.source}; 1 USDC valued at 1 USD` : "unavailable", explorer,
+      "", "Mezo network fee (paid in BTC)", "BTC", plainAmount(data.fee, NATIVE_DECIMALS, 2), ...valueCols(data.fee, btcAsset), explorer,
     ]);
   }
   // UTF-8 byte order mark so spreadsheet apps read accented names and labels correctly.
@@ -238,7 +266,7 @@ export function renderReceipt(root: HTMLElement, params: URLSearchParams): () =>
           },
         },
         icon("download"),
-        "Accounting CSV (EUR)",
+        "Accounting CSV (USD, EUR)",
       ),
       h("button", { class: "btn btn-ghost", onclick: () => void copyText(link, "Receipt link copied") }, icon("link"), "Copy link"),
       !isAdvice && d.batches.length === 1
@@ -285,7 +313,7 @@ export function renderReceipt(root: HTMLElement, params: URLSearchParams): () =>
           meta("From", extLink(addressUrl(d.chain, d.from), d.from, "mono")),
           ...shown.map((b) => meta("Reference", b.refText || "—")),
           ...shown.map((b) => meta(isAdvice ? "Paid to" : "Recipients", isAdvice ? extLink(addressUrl(d.chain, onlyTo!), getAddress(onlyTo!), "mono") : `${b.count}`)),
-          !isAdvice ? meta("Network fee", `${formatAmount(d.fee, NATIVE_DECIMALS, 4, 6)} USDC`) : null,
+          !isAdvice ? meta("Network fee", `${formatSats(d.fee)} (${formatAmount(d.fee, NATIVE_DECIMALS, 2, 10)} BTC)`) : null,
           meta("Transaction", extLink(txUrl(d.chain, d.hash), h("span", { class: "mono break" }, d.hash))),
           meta("Block", String(d.blockNumber)),
           ...shown.map((b) => meta("Contract", extLink(addressUrl(d.chain, b.emitter), b.emitter, "mono"))),
@@ -363,7 +391,7 @@ export function attachLabels(data: ReceiptData, csvText: string): number {
   const pool = sheet.rows.filter((r) => r.address && r.amount && r.label);
   let matched = 0;
   for (const b of data.batches) {
-    const scale = b.asset.decimals >= TOKEN_DECIMALS ? 10n ** BigInt(b.asset.decimals - TOKEN_DECIMALS) : 1n;
+    const scale = b.asset.decimals >= INPUT_DECIMALS ? 10n ** BigInt(b.asset.decimals - INPUT_DECIMALS) : 1n;
     for (const l of b.lines) {
       const i = pool.findIndex((r) => r.address!.toLowerCase() === l.to.toLowerCase() && r.amount! * scale === l.amount);
       if (i >= 0) {
@@ -373,13 +401,13 @@ export function attachLabels(data: ReceiptData, csvText: string): number {
       }
     }
   }
-  if (data.batches.length === 1) storageSet(`remitsheet:labels:${data.hash.toLowerCase()}`, data.batches[0].lines.map((l) => l.label));
+  if (data.batches.length === 1) storageSet(`remitsheet-mezo:labels:${data.hash.toLowerCase()}`, data.batches[0].lines.map((l) => l.label));
   toast(`${matched} label${matched === 1 ? "" : "s"} matched`);
   return matched;
 }
 
 export function renderReceiptLookup(root: HTMLElement): () => void {
-  const chains = [CHAINS[ARC_MAINNET], CHAINS[ARC_TESTNET], ...(devMode() ? [CHAINS[LOCAL_CHAIN]] : [])];
+  const chains = [CHAINS[MEZO_TESTNET], CHAINS[MEZO_MAINNET], ...(devMode() ? [CHAINS[LOCAL_CHAIN]] : [])];
   const input = h("input", { class: "input mono", id: "tx-input", placeholder: "0x… transaction hash", "aria-label": "Transaction hash" }) as HTMLInputElement;
   const select = h("select", { class: "input", id: "chain-select", "aria-label": "Network" }, chains.map((c) => h("option", { value: String(c.id) }, c.label))) as HTMLSelectElement;
   const error = h("p", { class: "fine error" });

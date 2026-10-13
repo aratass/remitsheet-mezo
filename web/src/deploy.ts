@@ -1,7 +1,7 @@
 import { concat } from "viem";
-import { CHAINS, DEFAULT_CHAIN, NATIVE_DECIMALS, REPO_URL, addressUrl, supportedChain, txUrl, type ChainConfig, type Hex } from "./config";
+import { CHAINS, DEFAULT_CHAIN, REPO_URL, addressUrl, supportedChain, txUrl, type ChainConfig, type Hex } from "./config";
 import { deploymentStatus, explainError, factoryAvailable, readClient, writeClient } from "./chain";
-import { formatAmount } from "./format";
+import { formatSats } from "./format";
 import { CREATE2_FACTORY, CREATE2_SALT, REMITSHEET_ABI, REMITSHEET_INIT_CODE, REMITSHEET_RUNTIME_HASH } from "./generated/remitsheet";
 import { openWalletPicker } from "./main";
 import { clear, extLink, h, icon, storageGet, storageSet } from "./ui";
@@ -78,9 +78,9 @@ export function renderDeploy(root: HTMLElement): () => void {
         if (r.status !== "success" || !r.contractAddress) throw new Error("The deployment transaction reverted.");
         address = r.contractAddress;
         // Remember the non-deterministic address in this browser; publish it in config.json for everyone.
-        const overrides = storageGet<Record<string, string>>("remitsheet:overrides", {});
+        const overrides = storageGet<Record<string, string>>("remitsheet-mezo:overrides", {});
         overrides[String(chain.id)] = address;
-        storageSet("remitsheet:overrides", overrides);
+        storageSet("remitsheet-mezo:overrides", overrides);
         chain.remitsheet = address;
       }
       if ((await deploymentStatus(chain, address)) !== "live") throw new Error("The contract code at the new address does not match Remitsheet.");
@@ -126,7 +126,7 @@ export function renderDeploy(root: HTMLElement): () => void {
         body = h("div", { class: "notice notice-bad" }, icon("alert"), state.message, " ", h("button", { class: "link-btn", onclick: () => void check() }, "Retry"));
         break;
       case "missing": {
-        const fee = state.fee !== undefined ? `≈ ${formatAmount(state.fee, NATIVE_DECIMALS, 4, 6)} USDC` : onTarget ? "—" : "connect to estimate";
+        const fee = state.fee !== undefined ? `≈ ${formatSats(state.fee)} (BTC)` : onTarget ? "—" : "connect to estimate";
         const action = !wallet.account
           ? h("button", { class: "btn btn-primary btn-lg", onclick: () => openWalletPicker() }, icon("wallet"), "Connect wallet")
           : !onTarget
@@ -142,6 +142,7 @@ export function renderDeploy(root: HTMLElement): () => void {
           {},
           h("div", { class: "kvs" }, h("div", { class: "kv" }, h("span", {}, "Status"), h("strong", {}, "Not deployed yet")), h("div", { class: "kv" }, h("span", {}, "Network fee"), h("span", { class: "mono", id: "deploy-fee" }, fee)), h("div", { class: "kv" }, h("span", {}, "Method"), h("span", {}, state.factory ? "CREATE2 factory (same address everywhere)" : "Standard deployment (factory not found)"))),
           action,
+          chain.faucetUrl ? h("p", { class: "fine" }, "Deploying costs a tiny amount of test BTC for gas. Get some from the ", extLink(chain.faucetUrl, "Mezo faucet"), ".") : null,
           failure ? h("div", { class: "notice notice-bad" }, icon("alert"), failure) : null,
         );
         break;
@@ -177,7 +178,7 @@ export function renderDeploy(root: HTMLElement): () => void {
           h("div", { class: "meta-item" }, h("dt", {}, "Runtime code hash"), h("dd", { class: "mono break" }, REMITSHEET_RUNTIME_HASH)),
           h("div", { class: "meta-item" }, h("dt", {}, "CREATE2 factory"), h("dd", { class: "mono break" }, CREATE2_FACTORY)),
           h("div", { class: "meta-item" }, h("dt", {}, "Salt"), h("dd", { class: "mono break" }, CREATE2_SALT)),
-          h("div", { class: "meta-item" }, h("dt", {}, "Compiler"), h("dd", {}, "solc 0.8.30, optimizer 20,000 runs, EVM prague, no metadata hash")),
+          h("div", { class: "meta-item" }, h("dt", {}, "Compiler"), h("dd", {}, "solc 0.8.30, optimizer 20,000 runs, EVM cancun, no metadata hash")),
         ),
         h(
           "p",

@@ -1,17 +1,36 @@
 import { getAddress, keccak256, slice, toHex } from "viem";
-import { CHAINS, DEFAULT_CHAIN, MAX_ROWS, NATIVE_DECIMALS, TOKEN_DECIMALS, supportedChain, txUrl, type ChainConfig, type Hex } from "./config";
-import { ERC20_ABI, deploymentStatus, explainError, readClient, writeClient } from "./chain";
+import {
+  BTC_PRECOMPILE,
+  CHAINS,
+  DEFAULT_CHAIN,
+  INPUT_DECIMALS,
+  INPUT_SCALE,
+  MAX_ROWS,
+  MEZO_TOKEN,
+  PERMIT_DOMAINS,
+  PRICE_ORACLE_PRECOMPILE,
+  TOKEN_DECIMALS,
+  supportedChain,
+  tokenAddress,
+  txUrl,
+  type Asset,
+  type ChainConfig,
+  type Hex,
+} from "./config";
+import { ERC20_ABI, deploymentStatus, explainError, permitSupported, readClient, signPermit, writeClient } from "./chain";
+import { COMFORT_RATIO, debtAfterBorrowing, formatRatio, headroom, liquidationLtv, loadCreditLine, loanToValue, type CreditLine } from "./borrow";
 import { parseSheet, payableRows, type Sheet } from "./csv";
-import { encodeRef, formatAmount, refByteLength, shortAddress, todayLabel } from "./format";
+import { encodeRef, formatAmount, formatSats, refByteLength, shortAddress, todayLabel } from "./format";
 import { CREATE2_FACTORY, REMITSHEET_ABI } from "./generated/remitsheet";
 import { navigate, openWalletPicker } from "./main";
 import { RECENT_KEY, type RecentBatch } from "./receipt";
+import { readRequest, requestLine, type PaymentRequest } from "./request";
 import { clear, download, extLink, h, icon, storageGet, storageSet } from "./ui";
 import { onWalletChange, switchTo, wallet } from "./wallet";
 
-type Asset = "USDC" | "EURC";
-const DRAFT_KEY = "remitsheet:draft";
-const SCALE = 10n ** BigInt(NATIVE_DECIMALS - TOKEN_DECIMALS); // 6-decimal sheet amounts -> 18-decimal native
+const DRAFT_KEY = "remitsheet-mezo:draft";
+const ASSET_KEY = "remitsheet-mezo:asset";
+const ASSETS: Asset[] = ["MUSD", "MEZO", "BTC"];
 
 /** Example rows use addresses nobody controls; they are blocked so they cannot be paid by mistake. */
 const EXAMPLE_ADDRESSES = [1, 2, 3, 4, 5].map((i) => getAddress(slice(keccak256(toHex(`remitsheet example ${i}`)), 12)));
@@ -24,19 +43,29 @@ function blockedAddresses(chain: ChainConfig | undefined): Map<string, string> {
   const m = new Map<string, string>();
   const c = chain ?? CHAINS[DEFAULT_CHAIN];
   m.set(c.remitsheet.toLowerCase(), "This is the Remitsheet contract itself, not a recipient.");
-  if (c.usdcErc20) m.set(c.usdcErc20.toLowerCase(), "This is the USDC token contract, not a person's wallet.");
-  if (c.eurc) m.set(c.eurc.toLowerCase(), "This is the EURC token contract, not a person's wallet.");
+  if (c.musd) m.set(c.musd.toLowerCase(), "This is the MUSD token contract, not a person's wallet. MUSD sent there is refused.");
+  m.set(MEZO_TOKEN.toLowerCase(), "This is the MEZO token contract, not a person's wallet.");
+  if (c.mezo) m.set(c.mezo.toLowerCase(), "This is the MEZO token contract, not a person's wallet.");
+  m.set(BTC_PRECOMPILE.toLowerCase(), "This is Mezo's BTC token contract, not a person's wallet.");
+  m.set(PRICE_ORACLE_PRECOMPILE.toLowerCase(), "This is Mezo's price oracle, not a recipient.");
+  for (const a of Object.values(c.borrow ?? {})) m.set(String(a).toLowerCase(), "This is a Mezo Borrow system contract, not a recipient.");
   m.set(CREATE2_FACTORY.toLowerCase(), "This is a deployment contract, not a recipient.");
-  m.set("0xfffffffffffffffffffffffffffffffffffffffe", "This is an Arc system address, not a recipient.");
   for (const a of EXAMPLE_ADDRESSES) m.set(a.toLowerCase(), "Example address: replace it with a real recipient.");
   return m;
 }
 
 type StepState = "todo" | "active" | "done" | "error";
+type TokenRoute = "allowance" | "permit" | "approve";
+
+/** Gas upper bound used before a token batch can be simulated (no allowance yet): Foundry measured
+ *  about 30k per MUSD line to a new holder plus about 90k for the permit and fixed costs. */
+function tokenGasBound(lines: number): bigint {
+  return 150_000n + 40_000n * BigInt(lines);
+}
 
 export function renderPay(root: HTMLElement): () => void {
   let text = storageGet<string>(DRAFT_KEY, "");
-  let asset: Asset = "USDC";
+  let asset: Asset = ASSETS.includes(storageGet<Asset>(ASSET_KEY, "MUSD")) ? storageGet<Asset>(ASSET_KEY, "MUSD") : "MUSD";
   let reference = `Payout ${todayLabel()}`;
   let allowDuplicates = false;
   let sheet: Sheet = parseSheet(text, { blocked: blockedAddresses(supportedChain(wallet.chainId)) });
@@ -45,7 +74,18 @@ export function renderPay(root: HTMLElement): () => void {
   let steps: { label: string; state: StepState; detail?: string }[] = [];
   let failure: { message: string; row?: number } | null = null;
   let success: { hash: Hex; chain: ChainConfig; count: number; total: bigint; asset: Asset } | null = null;
-  let quote: { fee?: bigint; feeApprox?: boolean; balance?: bigint; gasBalance?: bigint; contract?: string; error?: string; errorRow?: number } = {};
+  let quote: {
+    fee?: bigint;
+    feeApprox?: boolean;
+    balance?: bigint;
+    gasBalance?: bigint;
+    contract?: string;
+    route?: TokenRoute;
+    credit?: CreditLine | null;
+    error?: string;
+    errorRow?: number;
+  } = {};
+  let request: PaymentRequest | null = readRequest(new URLSearchParams(location.search));
 
   // ------------------------------------------------------------------ layout
   const textarea = h("textarea", {
@@ -71,22 +111,25 @@ export function renderPay(root: HTMLElement): () => void {
     fileInput.value = "";
   });
 
+  const requestSlot = h("div", { id: "request-slot" });
   const summary = h("div", { class: "summary", id: "sheet-summary" });
   const tableWrap = h("div", { class: "table-wrap", id: "preview" });
   const panel = h("aside", { class: "card pay-panel", id: "pay-panel" });
+  const creditSlot = h("div", { id: "credit-slot" });
 
   clear(
     root,
     h(
       "section",
       { class: "hero" },
-      h("h1", {}, "Pay a whole spreadsheet in one Arc transaction"),
+      h("h1", {}, "Pay your whole team in MUSD, without selling your Bitcoin"),
       h(
         "p",
         { class: "lead" },
-        "Paste or upload a list of addresses and amounts. Remitsheet checks every line, pays everyone at once in USDC or EURC, and gives you a receipt and an accounting export with EUR values.",
+        "Paste or upload a list of addresses and amounts. Remitsheet checks every line and pays everyone in one Mezo transaction: MUSD and MEZO with a single signature, or BTC. You get a receipt and an accounting export with USD and EUR values.",
       ),
     ),
+    requestSlot,
     h(
       "div",
       { class: "pay-grid" },
@@ -110,7 +153,13 @@ export function renderPay(root: HTMLElement): () => void {
           h(
             "p",
             { class: "fine" },
-            `Amounts use a dot for decimals (up to 6 places), no thousands separators. Comma, semicolon or tab separated; a header row is optional. Up to ${MAX_ROWS} recipients per batch.`,
+            h(
+              "span",
+              {},
+              `Amounts use a dot for decimals (up to ${INPUT_DECIMALS} places), no thousands separators. Comma, semicolon or tab separated; a header row is optional. Up to ${MAX_ROWS} recipients per batch. Collect lines from your team with `,
+              h("a", { href: "#/request", onclick: (e: Event) => (e.preventDefault(), navigate(location.pathname + location.search + "#/request")) }, "payment request links"),
+              ".",
+            ),
           ),
         ),
         h(
@@ -119,8 +168,9 @@ export function renderPay(root: HTMLElement): () => void {
           h("div", { class: "card-head" }, h("h2", {}, h("span", { class: "step-no" }, "2"), "Review"), summary),
           tableWrap,
         ),
+        creditSlot,
       ),
-      panel,
+      h("div", { class: "pay-side" }, panel),
     ),
   );
 
@@ -141,8 +191,72 @@ export function renderPay(root: HTMLElement): () => void {
     void refreshQuote();
   }
 
+  function setAsset(a: Asset) {
+    asset = a;
+    storageSet(ASSET_KEY, a);
+    success = null;
+    failure = null;
+    updateTable();
+    updatePanel();
+    void refreshQuote();
+  }
+
+  function drawRequest() {
+    if (!request) {
+      clear(requestSlot);
+      return;
+    }
+    const r = request;
+    const chainNote = r.chainId && CHAINS[r.chainId] ? ` on ${CHAINS[r.chainId].label}` : "";
+    clear(
+      requestSlot,
+      h(
+        "section",
+        { class: "card request-banner", id: "request-banner" },
+        icon("link", "icon big"),
+        h(
+          "div",
+          { class: "request-text" },
+          h("strong", {}, `Payment request: ${r.amount} ${r.asset}${chainNote}`),
+          h("span", { class: "mono break" }, r.address),
+          r.note ? h("span", { class: "muted" }, `“${r.note}”`) : null,
+          h("span", { class: "fine" }, "Anyone can make a request link, so check that you know this address before paying."),
+        ),
+        h(
+          "div",
+          { class: "row-actions" },
+          h(
+            "button",
+            {
+              class: "btn btn-primary",
+              id: "add-request",
+              onclick: () => {
+                const line = requestLine(r);
+                const base = text.trim() ? text.replace(/\s*$/, "\n") : "address,amount,label\n";
+                if (asset !== r.asset) setAsset(r.asset);
+                dismissRequest();
+                setText(base + line + "\n", true);
+              },
+            },
+            icon("sheet"),
+            "Add to sheet",
+          ),
+          h("button", { class: "btn btn-ghost", onclick: () => dismissRequest() }, "Dismiss"),
+        ),
+      ),
+    );
+  }
+
+  function dismissRequest() {
+    request = null;
+    const u = new URL(location.href);
+    for (const k of ["pay", "amount", "asset", "note", "chain"]) u.searchParams.delete(k);
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+    drawRequest();
+  }
+
   function updateTable() {
-    const total = formatAmount(sheet.total, TOKEN_DECIMALS);
+    const total = formatAmount(sheet.total, INPUT_DECIMALS);
     const rows = sheet.rows;
     clear(
       summary,
@@ -174,7 +288,7 @@ export function renderPay(root: HTMLElement): () => void {
               h("td", { class: "num muted" }, r.line),
               h("td", { class: "mono addr", title: r.address ?? r.addressText }, r.address ? r.address : r.addressText || "—"),
               h("td", { class: "label-cell" }, r.label || h("span", { class: "muted" }, "—")),
-              h("td", { class: "num mono" }, r.amount ? formatAmount(r.amount, TOKEN_DECIMALS) : r.amountText || "—"),
+              h("td", { class: "num mono" }, r.amount ? formatAmount(r.amount, INPUT_DECIMALS) : r.amountText || "—"),
               h(
                 "td",
                 { class: "center" },
@@ -193,7 +307,7 @@ export function renderPay(root: HTMLElement): () => void {
         h(
           "tfoot",
           {},
-          h("tr", {}, h("td", {}), h("td", { colspan: 2 }, "Total"), h("td", { class: "num mono" }, formatAmount(sheet.total, TOKEN_DECIMALS)), h("td", {})),
+          h("tr", {}, h("td", {}), h("td", { colspan: 2 }, "Total"), h("td", { class: "num mono" }, formatAmount(sheet.total, INPUT_DECIMALS)), h("td", {})),
         ),
       ),
     );
@@ -214,6 +328,11 @@ export function renderPay(root: HTMLElement): () => void {
     return refByteLength(reference.trim()) <= 32;
   }
 
+  /** Total of the payable lines in 18-decimal base units. */
+  function totalBase() {
+    return sheet.total * INPUT_SCALE;
+  }
+
   async function refreshQuote() {
     const seq = ++quoteSeq;
     const chain = supportedChain(wallet.chainId);
@@ -221,36 +340,46 @@ export function renderPay(root: HTMLElement): () => void {
     if (!wallet.account || !chain) {
       quote = {};
       updatePanel();
+      drawCredit();
       return;
     }
+    const account = wallet.account;
     const pc = readClient(chain);
     const next: typeof quote = {};
     try {
       const status = await deploymentStatus(chain);
       next.contract = status;
-      next.gasBalance = await pc.getBalance({ address: wallet.account });
-      if (asset === "USDC") next.balance = next.gasBalance;
-      else if (chain.eurc) next.balance = (await pc.readContract({ address: chain.eurc, abi: ERC20_ABI, functionName: "balanceOf", args: [wallet.account] })) as bigint;
+      next.gasBalance = await pc.getBalance({ address: account });
+      const token = tokenAddress(chain, asset);
+      if (asset === "BTC") next.balance = next.gasBalance;
+      else if (token) next.balance = (await pc.readContract({ address: token, abi: ERC20_ABI, functionName: "balanceOf", args: [account] })) as bigint;
+      if (asset === "MUSD" && chain.borrow) {
+        try {
+          next.credit = await loadCreditLine(chain, account);
+        } catch {
+          next.credit = null;
+        }
+      }
 
       if (status === "live" && rows.length && !sheet.errorCount) {
         const gasPrice = await pc.getGasPrice();
         const to = rows.map((r) => r.address);
+        const amounts = rows.map((r) => r.amount * INPUT_SCALE);
+        const total = amounts.reduce((a, b) => a + b, 0n);
         const ref = encodeRef(refBytesOk() ? reference : "");
-        if (asset === "USDC") {
-          const amounts = rows.map((r) => r.amount * SCALE);
-          const value = amounts.reduce((a, b) => a + b, 0n);
-          const gas = await pc.estimateContractGas({ address: chain.remitsheet, abi: REMITSHEET_ABI, functionName: "payNative", args: [to, amounts, ref], value, account: wallet.account });
+        if (asset === "BTC") {
+          const gas = await pc.estimateContractGas({ address: chain.remitsheet, abi: REMITSHEET_ABI, functionName: "payNative", args: [to, amounts, ref], value: total, account });
           next.fee = gas * gasPrice;
-        } else if (chain.eurc) {
-          const amounts = rows.map((r) => r.amount);
-          const total = amounts.reduce((a, b) => a + b, 0n);
-          const allowance = (await pc.readContract({ address: chain.eurc, abi: ERC20_ABI, functionName: "allowance", args: [wallet.account, chain.remitsheet] })) as bigint;
+        } else if (token) {
+          const allowance = (await pc.readContract({ address: token, abi: ERC20_ABI, functionName: "allowance", args: [account, chain.remitsheet] })) as bigint;
           if (allowance >= total) {
-            const gas = await pc.estimateContractGas({ address: chain.remitsheet, abi: REMITSHEET_ABI, functionName: "payToken", args: [chain.eurc, to, amounts, ref], account: wallet.account });
+            next.route = "allowance";
+            const gas = await pc.estimateContractGas({ address: chain.remitsheet, abi: REMITSHEET_ABI, functionName: "payToken", args: [token, to, amounts, ref], account });
             next.fee = gas * gasPrice;
           } else {
-            // Before approval the batch cannot be simulated; use a conservative upper bound.
-            next.fee = (60_000n + 40_000n + 32_000n * BigInt(rows.length)) * gasPrice;
+            next.route = (await permitSupported(chain, token, PERMIT_DOMAINS[asset as "MUSD" | "MEZO"])) ? "permit" : "approve";
+            // Before the permit is signed the batch cannot be simulated; use a conservative upper bound.
+            next.fee = tokenGasBound(rows.length) * gasPrice;
             next.feeApprox = true;
           }
         }
@@ -265,6 +394,7 @@ export function renderPay(root: HTMLElement): () => void {
     quote = next;
     if (rowChanged) updateTable();
     updatePanel();
+    drawCredit();
   }
 
   function stepList() {
@@ -282,32 +412,31 @@ export function renderPay(root: HTMLElement): () => void {
     );
   }
 
+  function feeText(): string {
+    if (quote.fee === undefined) return wallet.account ? "—" : "connect to estimate";
+    return `${quote.feeApprox ? "≤ " : "≈ "}${formatSats(quote.fee)} (BTC)`;
+  }
+
   function updatePanel() {
     const chain = supportedChain(wallet.chainId);
     const rows = payableRows(sheet);
-    const eurcAvailable = !!(chain ?? CHAINS[DEFAULT_CHAIN]).eurc;
+    const shown = chain ?? CHAINS[DEFAULT_CHAIN];
     const assetButtons = h(
       "div",
-      { class: "segmented", role: "radiogroup", "aria-label": "Asset" },
-      (["USDC", "EURC"] as Asset[]).map((a) =>
+      { class: "segmented seg-3", role: "radiogroup", "aria-label": "Asset" },
+      ASSETS.map((a) =>
         h(
           "button",
           {
             class: asset === a ? "seg active" : "seg",
             role: "radio",
             "aria-checked": String(asset === a),
-            disabled: busy || (a === "EURC" && !eurcAvailable),
-            onclick: () => {
-              asset = a;
-              success = null;
-              failure = null;
-              updateTable();
-              updatePanel();
-              void refreshQuote();
-            },
+            "data-asset": a,
+            disabled: busy || (a !== "BTC" && !tokenAddress(shown, a)),
+            onclick: () => setAsset(a),
           },
           h("strong", {}, a),
-          h("small", {}, a === "USDC" ? "1 transaction" : "approve + pay"),
+          h("small", {}, a === "BTC" ? "1 transaction" : "1 signature + 1 tx"),
         ),
       ),
     );
@@ -337,27 +466,29 @@ export function renderPay(root: HTMLElement): () => void {
         )
       : null;
 
-    const total = sheet.total;
+    const total = totalBase();
     const lines: (HTMLElement | null)[] = [
       h("div", { class: "kv" }, h("span", {}, "Recipients"), h("strong", {}, String(rows.length))),
-      h("div", { class: "kv" }, h("span", {}, "Total"), h("strong", { class: "mono", id: "total-amount" }, `${formatAmount(total, TOKEN_DECIMALS)} ${asset}`)),
-      h(
-        "div",
-        { class: "kv" },
-        h("span", {}, "Network fee"),
-        h("span", { class: "mono", id: "fee-estimate" }, quote.fee !== undefined ? `${quote.feeApprox ? "≤ " : "≈ "}${formatAmount(quote.fee, NATIVE_DECIMALS, 4, 6)} USDC` : wallet.account ? "—" : "connect to estimate"),
-      ),
+      h("div", { class: "kv" }, h("span", {}, "Total"), h("strong", { class: "mono", id: "total-amount" }, `${formatAmount(sheet.total, INPUT_DECIMALS)} ${asset}`)),
+      h("div", { class: "kv" }, h("span", {}, "Network fee"), h("span", { class: "mono", id: "fee-estimate" }, feeText())),
       wallet.account && quote.balance !== undefined
-        ? h("div", { class: "kv" }, h("span", {}, `Your ${asset} balance`), h("span", { class: "mono" }, `${formatAmount(quote.balance, asset === "USDC" ? NATIVE_DECIMALS : TOKEN_DECIMALS, 2, 6)} ${asset}`))
+        ? h("div", { class: "kv" }, h("span", {}, `Your ${asset} balance`), h("span", { class: "mono", id: "asset-balance" }, `${formatAmount(quote.balance, TOKEN_DECIMALS, 2, asset === "BTC" ? 8 : 2)} ${asset}`))
         : null,
     ];
 
-    const needed = asset === "USDC" ? total * SCALE + (quote.fee ?? 0n) : total;
+    const needed = asset === "BTC" ? total + (quote.fee ?? 0n) : total;
+    const faucet = chain?.faucetUrl;
     const short =
       !success && quote.balance !== undefined && total > 0n && quote.balance < needed
-        ? `Not enough ${asset}: you need ${formatAmount(needed, asset === "USDC" ? NATIVE_DECIMALS : TOKEN_DECIMALS, 2, 6)}${asset === "USDC" ? " including the fee" : ""}.`
-        : asset === "EURC" && quote.gasBalance !== undefined && quote.fee !== undefined && quote.gasBalance < quote.fee
-          ? "You also need a little USDC on Arc to pay the network fee."
+        ? h(
+            "span",
+            {},
+            `Not enough ${asset}: you need ${formatAmount(needed, TOKEN_DECIMALS, 2, asset === "BTC" ? 8 : 2)}${asset === "BTC" ? " including the fee" : ""}.`,
+            asset === "MUSD" && chain?.borrowUrl ? " You can borrow MUSD against your BTC on Mezo (see below)." : "",
+            asset !== "MUSD" && faucet ? h("span", {}, " Test BTC and MEZO: ", extLink(faucet, "Mezo faucet"), ".") : null,
+          )
+        : asset !== "BTC" && quote.gasBalance !== undefined && quote.fee !== undefined && quote.gasBalance < quote.fee
+          ? h("span", {}, "You also need a little BTC on Mezo to pay the network fee.", faucet ? h("span", {}, " Get test BTC from the ", extLink(faucet, "Mezo faucet"), ".") : null)
           : null;
 
     const payBtn = h(
@@ -371,7 +502,7 @@ export function renderPay(root: HTMLElement): () => void {
     if (!wallet.account) {
       action = h("button", { class: "btn btn-primary btn-lg", onclick: () => openWalletPicker() }, icon("wallet"), "Connect wallet to pay");
     } else if (!chain) {
-      action = h("button", { class: "btn btn-warn btn-lg", onclick: () => void switchTo(CHAINS[DEFAULT_CHAIN]).catch(() => undefined) }, icon("alert"), "Switch wallet to Arc");
+      action = h("button", { class: "btn btn-warn btn-lg", onclick: () => void switchTo(CHAINS[DEFAULT_CHAIN]).catch(() => undefined) }, icon("alert"), `Switch wallet to ${CHAINS[DEFAULT_CHAIN].label}`);
     } else if (quote.contract === "missing") {
       action = h(
         "div",
@@ -384,6 +515,13 @@ export function renderPay(root: HTMLElement): () => void {
     } else {
       action = payBtn;
     }
+
+    const howText =
+      asset === "BTC"
+        ? "All-or-nothing: either every line is paid in this one transaction, or nothing moves. Remitsheet never holds your funds."
+        : quote.route === "approve"
+          ? `This ${asset} token has no usable permit here, so the app asks for an approval of the exact total first, then the batch. All-or-nothing.`
+          : `You sign one permit for exactly the batch total (free, no gas), then confirm one transaction. ${asset} moves straight from your wallet to each recipient and no approval is left behind. All-or-nothing.`;
 
     const focused = document.activeElement as HTMLInputElement | null;
     const keepFocus = focused?.id === "ref-input" ? { start: focused.selectionStart, end: focused.selectionEnd } : null;
@@ -404,25 +542,82 @@ export function renderPay(root: HTMLElement): () => void {
             h("span", {}, `${sheet.errorCount} line${sheet.errorCount === 1 ? " has" : "s have"} errors. Fix ${sheet.errorCount === 1 ? "it" : "them"} or `, h("button", { class: "link-btn", onclick: removeErrorLines }, "remove those lines"), "."),
           )
         : null,
-      short ? h("div", { class: "notice notice-warn" }, icon("alert"), short) : null,
+      short ? h("div", { class: "notice notice-warn", id: "short-notice" }, icon("alert"), short) : null,
       quote.error && !failure && !success ? h("div", { class: "notice notice-warn", id: "quote-error" }, icon("info"), quote.error) : null,
       dupBox,
       steps.length ? stepList() : null,
       failure ? h("div", { class: "notice notice-bad", id: "pay-error" }, icon("alert"), failure.message) : null,
       success ? successBox(success) : action,
-      h(
-        "p",
-        { class: "fine" },
-        icon("shield"),
-        asset === "USDC"
-          ? "All-or-nothing: either every line is paid in this one transaction, or nothing moves. Remitsheet never holds your funds."
-          : "EURC needs an approval of the exact total first, then the batch. All-or-nothing; tokens move straight from your wallet to each recipient.",
-      ),
+      h("p", { class: "fine" }, icon("shield"), howText),
     );
     if (keepFocus) {
       refInput.focus();
       refInput.setSelectionRange(keepFocus.start, keepFocus.end);
     }
+  }
+
+  /** Mezo Borrow panel: shown for MUSD payouts when the network has the borrowing contracts. */
+  function drawCredit() {
+    const chain = supportedChain(wallet.chainId);
+    const line = quote.credit;
+    if (asset !== "MUSD" || !chain?.borrow || !wallet.account || line === undefined) {
+      clear(creditSlot);
+      return;
+    }
+    const borrowLink = chain.borrowUrl ? extLink(chain.borrowUrl, h("span", {}, "Borrow MUSD on Mezo ", icon("external")), "btn btn-secondary") : null;
+    if (line === null) {
+      clear(creditSlot, h("section", { class: "card credit", id: "credit-line" }, h("h3", {}, "Your Bitcoin credit line"), h("p", { class: "fine" }, "Could not read Mezo Borrow right now."), borrowLink));
+      return;
+    }
+    const usd = (wei: bigint) => formatAmount((wei * line.price) / 10n ** 18n, 18, 0, 0);
+    const shortfall = quote.balance !== undefined && totalBase() > quote.balance ? totalBase() - quote.balance : 0n;
+    const rows: (HTMLElement | null)[] = [
+      h("div", { class: "kv" }, h("span", {}, "BTC price (Mezo oracle)"), h("span", { class: "mono", id: "btc-price" }, `$${formatAmount(line.price, 18, 0, 0)}`)),
+    ];
+    let body: (HTMLElement | string | null)[] = [];
+    if (line.active) {
+      const ltv = loanToValue(line.coll, line.debt, line.price);
+      const room = headroom(line);
+      const comfortLtv = liquidationLtv(COMFORT_RATIO);
+      rows.push(
+        h("div", { class: "kv" }, h("span", {}, "Collateral"), h("span", { class: "mono" }, `${formatAmount(line.coll, 18, 4, 8)} BTC (≈ $${usd(line.coll)})`)),
+        h("div", { class: "kv" }, h("span", {}, "Debt"), h("span", { class: "mono" }, `${formatAmount(line.debt, 18, 2, 2)} MUSD`)),
+        h("div", { class: "kv" }, h("span", {}, "Loan-to-value"), h("strong", { class: "mono", id: "credit-ltv" }, formatRatio(ltv))),
+        h("div", { class: "kv" }, h("span", {}, `Room to borrow up to ${formatRatio(comfortLtv).replace(/\.0%$/, "%")}`), h("span", { class: "mono", id: "credit-room" }, `${formatAmount(room, 18, 2, 2)} MUSD`)),
+      );
+      if (shortfall > 0n) {
+        const after = loanToValue(line.coll, debtAfterBorrowing(line, shortfall), line.price);
+        const risky = after > comfortLtv;
+        body = [
+          h(
+            "div",
+            { class: risky ? "notice notice-warn" : "notice", id: "credit-advice" },
+            icon(risky ? "alert" : "info"),
+            `This batch needs ${formatAmount(shortfall, 18, 2, 2)} MUSD more than you hold. Borrowing it on Mezo would move your loan-to-value from ${formatRatio(ltv)} to ${formatRatio(after)}${risky ? `, above the ${formatRatio(comfortLtv).replace(/\.0%$/, "%")} we suggest` : ""}.`,
+          ),
+        ];
+      }
+    } else {
+      body = [
+        h(
+          "p",
+          { class: "fine", id: "credit-none" },
+          `No Mezo loan on this address yet. Mezo lets you borrow MUSD against BTC at a fixed rate instead of selling it (smallest loan ${formatAmount(line.minNetDebt, 18, 0, 0)} MUSD, one-off fee ${formatRatio(line.borrowingRate * 100n).replace(/\.0%$/, "%")}).`,
+        ),
+      ];
+    }
+    clear(
+      creditSlot,
+      h(
+        "section",
+        { class: "card credit", id: "credit-line" },
+        h("h3", {}, "Your Bitcoin credit line"),
+        h("div", { class: "kvs" }, rows),
+        ...body,
+        borrowLink,
+        h("p", { class: "fine" }, `Read live from Mezo Borrow. A loan is liquidated above ${formatRatio(liquidationLtv(line.mcr))} loan-to-value, so keep a buffer.`),
+      ),
+    );
   }
 
   function successBox(s: NonNullable<typeof success>) {
@@ -431,7 +626,7 @@ export function renderPay(root: HTMLElement): () => void {
     return h(
       "div",
       { class: "success", id: "pay-success" },
-      h("div", { class: "success-head" }, icon("check", "icon big"), h("div", {}, h("strong", {}, `Paid ${s.count} recipient${s.count === 1 ? "" : "s"}`), h("span", {}, `${formatAmount(s.total, TOKEN_DECIMALS)} ${s.asset} · confirmed on ${s.chain.label}`))),
+      h("div", { class: "success-head" }, icon("check", "icon big"), h("div", {}, h("strong", {}, `Paid ${s.count} recipient${s.count === 1 ? "" : "s"}`), h("span", {}, `${formatAmount(s.total, INPUT_DECIMALS)} ${s.asset} · confirmed on ${s.chain.label}`))),
       h(
         "div",
         { class: "row-actions" },
@@ -442,9 +637,17 @@ export function renderPay(root: HTMLElement): () => void {
     );
   }
 
+  /** False when the wallet is known to hold less than the batch needs (BTC includes the fee). */
+  function balanceOk() {
+    if (quote.balance === undefined) return true;
+    const needed = asset === "BTC" ? totalBase() + (quote.fee ?? 0n) : totalBase();
+    return quote.balance >= needed;
+  }
+
   function canPay() {
     return (
       !busy &&
+      balanceOk() &&
       !!wallet.account &&
       !!supportedChain(wallet.chainId) &&
       quote.contract === "live" &&
@@ -468,63 +671,82 @@ export function renderPay(root: HTMLElement): () => void {
     const lines = rows.map((r) => r.line);
     const to = rows.map((r) => r.address);
     const labels = rows.map((r) => r.label);
+    const amounts = rows.map((r) => r.amount * INPUT_SCALE);
+    const total = amounts.reduce((a, b) => a + b, 0n);
     const ref = encodeRef(reference);
     const pc = readClient(chain);
     const wc = writeClient(chain);
     const account = wallet.account;
+    const payAsset = asset;
     busy = true;
     failure = null;
     success = null;
+    const settle = `Settle on ${chain.label}`;
+    let route: TokenRoute | "native" = "native";
+    const token = tokenAddress(chain, payAsset);
+    if (payAsset !== "BTC" && token) {
+      const allowance = (await pc.readContract({ address: token, abi: ERC20_ABI, functionName: "allowance", args: [account, chain.remitsheet] }).catch(() => 0n)) as bigint;
+      route = allowance >= total ? "allowance" : (await permitSupported(chain, token, PERMIT_DOMAINS[payAsset as "MUSD" | "MEZO"])) ? "permit" : "approve";
+    }
     steps =
-      asset === "USDC"
-        ? [{ label: "Check every line", state: "todo" }, { label: "Confirm in your wallet", state: "todo" }, { label: `Settle on ${chain.label}`, state: "todo" }]
-        : [{ label: "Approve EURC (exact total)", state: "todo" }, { label: "Check every line", state: "todo" }, { label: "Confirm in your wallet", state: "todo" }, { label: `Settle on ${chain.label}`, state: "todo" }];
+      route === "native" || route === "allowance"
+        ? [{ label: "Check every line", state: "todo" }, { label: "Confirm in your wallet", state: "todo" }, { label: settle, state: "todo" }]
+        : route === "permit"
+          ? [{ label: `Sign a permit for exactly ${formatAmount(sheet.total, INPUT_DECIMALS)} ${payAsset} (free)`, state: "todo" }, { label: "Check every line", state: "todo" }, { label: "Confirm in your wallet", state: "todo" }, { label: settle, state: "todo" }]
+          : [{ label: `Approve ${payAsset} (exact total)`, state: "todo" }, { label: "Check every line", state: "todo" }, { label: "Confirm in your wallet", state: "todo" }, { label: settle, state: "todo" }];
     updatePanel();
     let i = 0;
     try {
       let hash: Hex;
-      if (asset === "USDC") {
-        const amounts = rows.map((r) => r.amount * SCALE);
-        const value = amounts.reduce((a, b) => a + b, 0n);
+      if (route === "native") {
         setStep(i, "active");
-        const { request } = await pc.simulateContract({ address: chain.remitsheet, abi: REMITSHEET_ABI, functionName: "payNative", args: [to, amounts, ref], value, account });
+        const { request: req } = await pc.simulateContract({ address: chain.remitsheet, abi: REMITSHEET_ABI, functionName: "payNative", args: [to, amounts, ref], value: total, account });
         setStep(i++, "done");
         setStep(i, "active");
-        hash = await wc.writeContract({ ...request, account, chain: wc.chain });
-      } else {
-        const token = chain.eurc!;
-        const amounts = rows.map((r) => r.amount);
-        const total = amounts.reduce((a, b) => a + b, 0n);
+        hash = await wc.writeContract({ ...req, account, chain: wc.chain });
+      } else if (route === "permit") {
+        setStep(i, "active", "check your wallet");
+        const sig = await signPermit(chain, token!, PERMIT_DOMAINS[payAsset as "MUSD" | "MEZO"], total);
+        setStep(i++, "done", "signed");
         setStep(i, "active");
-        const allowance = (await pc.readContract({ address: token, abi: ERC20_ABI, functionName: "allowance", args: [account, chain.remitsheet] })) as bigint;
-        if (allowance < total) {
-          const approveHash = await wc.writeContract({ address: token, abi: ERC20_ABI, functionName: "approve", args: [chain.remitsheet, total], account, chain: wc.chain });
+        const { request: req } = await pc.simulateContract({
+          address: chain.remitsheet,
+          abi: REMITSHEET_ABI,
+          functionName: "payTokenWithPermit",
+          args: [token!, to, amounts, ref, sig.deadline, sig.v, sig.r, sig.s],
+          account,
+        });
+        setStep(i++, "done");
+        setStep(i, "active");
+        hash = await wc.writeContract({ ...req, account, chain: wc.chain });
+      } else {
+        if (route === "approve") {
+          setStep(i, "active");
+          const approveHash = await wc.writeContract({ address: token!, abi: ERC20_ABI, functionName: "approve", args: [chain.remitsheet, total], account, chain: wc.chain });
           setStep(i, "active", "waiting for confirmation");
           const r = await pc.waitForTransactionReceipt({ hash: approveHash });
-          if (r.status !== "success") throw new Error("The EURC approval failed on-chain.");
+          if (r.status !== "success") throw new Error(`The ${payAsset} approval failed on-chain.`);
           setStep(i++, "done", "approved");
-        } else {
-          setStep(i++, "done", "already approved");
         }
         setStep(i, "active");
-        const { request } = await pc.simulateContract({ address: chain.remitsheet, abi: REMITSHEET_ABI, functionName: "payToken", args: [token, to, amounts, ref], account });
+        const { request: req } = await pc.simulateContract({ address: chain.remitsheet, abi: REMITSHEET_ABI, functionName: "payToken", args: [token!, to, amounts, ref], account });
         setStep(i++, "done");
         setStep(i, "active");
-        hash = await wc.writeContract({ ...request, account, chain: wc.chain });
+        hash = await wc.writeContract({ ...req, account, chain: wc.chain });
       }
       setStep(i++, "done");
       setStep(i, "active", shortAddress(hash));
-      storageSet(`remitsheet:labels:${hash.toLowerCase()}`, labels);
+      storageSet(`remitsheet-mezo:labels:${hash.toLowerCase()}`, labels);
       const receipt = await pc.waitForTransactionReceipt({ hash });
       if (receipt.status !== "success") throw new Error("The transaction was included but reverted, so nothing was paid. Only the network fee was charged.");
       setStep(i, "done", `block ${receipt.blockNumber}`);
-      success = { hash, chain, count: rows.length, total: sheet.total, asset };
+      success = { hash, chain, count: rows.length, total: sheet.total, asset: payAsset };
       storageSet(DRAFT_KEY, "");
       const recent = storageGet<RecentBatch[]>(RECENT_KEY, []).filter((r) => r.hash !== hash);
-      recent.unshift({ hash, chainId: chain.id, timestamp: Math.floor(Date.now() / 1000), count: rows.length, total: formatAmount(sheet.total, TOKEN_DECIMALS), asset, ref: reference.trim() });
+      recent.unshift({ hash, chainId: chain.id, timestamp: Math.floor(Date.now() / 1000), count: rows.length, total: formatAmount(sheet.total, INPUT_DECIMALS), asset: payAsset, ref: reference.trim() });
       storageSet(RECENT_KEY, recent.slice(0, 50));
     } catch (err) {
-      const explained = explainError(err, lines, asset);
+      const explained = explainError(err, lines, payAsset);
       failure = explained;
       const active = steps.findIndex((s) => s.state === "active");
       if (active >= 0) steps[active] = { ...steps[active], state: "error" };
@@ -536,6 +758,7 @@ export function renderPay(root: HTMLElement): () => void {
     }
   }
 
+  drawRequest();
   updateTable();
   updatePanel();
   void refreshQuote();
@@ -544,3 +767,5 @@ export function renderPay(root: HTMLElement): () => void {
   });
   return () => off();
 }
+
+

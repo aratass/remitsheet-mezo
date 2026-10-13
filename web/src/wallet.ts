@@ -28,7 +28,7 @@ function emit() {
   for (const fn of listeners) fn();
 }
 
-const LAST_WALLET_KEY = "remitsheet:wallet";
+const LAST_WALLET_KEY = "remitsheet-mezo:wallet";
 
 /** EIP-6963 multi-wallet discovery, with window.ethereum as a fallback. */
 export function startDiscovery(): void {
@@ -156,7 +156,7 @@ export async function switchTo(chain: ChainConfig): Promise<void> {
         {
           chainId: chainIdHex,
           chainName: chain.name,
-          nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+          nativeCurrency: { name: "Bitcoin", symbol: "BTC", decimals: 18 },
           rpcUrls: [chain.rpcUrl],
           blockExplorerUrls: chain.explorer ? [chain.explorer] : undefined,
         },

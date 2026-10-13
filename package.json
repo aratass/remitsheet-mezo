@@ -1,8 +1,8 @@
 {
-  "name": "remitsheet",
+  "name": "remitsheet-mezo",
   "version": "1.0.0",
   "private": true,
-  "description": "Pay a whole spreadsheet of people in USDC or EURC with one Arc transaction, with receipts and an accounting export.",
+  "description": "Pay a whole spreadsheet in MUSD, MEZO or BTC with one permit signature and one Mezo transaction, with your Mezo Borrow credit line, receipts and a USD and EUR accounting export.",
   "license": "MIT",
   "type": "module",
   "scripts": {

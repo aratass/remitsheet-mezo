@@ -61,7 +61,7 @@ function scaleRate(rate: string): bigint {
   return BigInt(w) * 10n ** 8n + BigInt((f + "00000000").slice(0, 8));
 }
 
-/** EUR cents for `amount` base units of a USD-pegged asset (1 USDC valued at 1 USD), half-up. */
+/** EUR cents for `amount` base units of a USD-pegged asset (1 MUSD valued at 1 USD), half-up. */
 export function usdToEurCents(amount: bigint, decimals: number, usdPerEur: string): bigint {
   const rate = scaleRate(usdPerEur);
   const num = amount * 100n * 10n ** 8n;

@@ -1,5 +1,5 @@
 import { getAddress } from "viem";
-import { MAX_INPUT_DECIMALS, MAX_ROWS, type Hex } from "./config";
+import { INPUT_DECIMALS, MAX_ROWS, type Hex } from "./config";
 import { parseDecimal } from "./format";
 
 export type Row = {
@@ -8,7 +8,7 @@ export type Row = {
   address?: Hex;
   addressText: string;
   amountText: string;
-  /** Amount in 6-decimal units (USDC/EURC precision). */
+  /** Amount in 8-decimal units (one satoshi for BTC). */
   amount?: bigint;
   label: string;
   errors: string[];
@@ -17,7 +17,7 @@ export type Row = {
 
 export type Sheet = {
   rows: Row[];
-  /** Sum of valid rows in 6-decimal units. */
+  /** Sum of valid rows in 8-decimal units. */
   total: bigint;
   errorCount: number;
   warningCount: number;
@@ -32,7 +32,7 @@ export type ParseOptions = {
 };
 
 const ADDRESS_HEADERS = ["address", "wallet", "recipient", "to", "account", "payee", "evm address", "wallet address"];
-const AMOUNT_HEADERS = ["amount", "value", "sum", "usdc", "eurc", "pay", "payment", "total"];
+const AMOUNT_HEADERS = ["amount", "value", "sum", "musd", "mezo", "btc", "usd", "pay", "payment", "total"];
 const LABEL_HEADERS = ["label", "name", "note", "memo", "description", "reference", "invoice", "comment"];
 
 /** Splits CSV text into records of fields, honouring double quotes (RFC 4180). */
@@ -175,9 +175,9 @@ export function parseSheet(input: string, options: ParseOptions = {}): Sheet {
       row.errors.push("Use digits with a dot for decimals and no thousands separators, for example 1250.50.");
     } else if (!row.errors.length || !row.errors[row.errors.length - 1].startsWith("The amount looks split")) {
       const frac = amountText.split(".")[1] ?? "";
-      const value = parseDecimal(amountText, MAX_INPUT_DECIMALS);
-      if (frac.length > MAX_INPUT_DECIMALS) {
-        row.errors.push(`Too many decimal places (at most ${MAX_INPUT_DECIMALS}).`);
+      const value = parseDecimal(amountText, INPUT_DECIMALS);
+      if (frac.length > INPUT_DECIMALS) {
+        row.errors.push(`Too many decimal places (at most ${INPUT_DECIMALS}).`);
       } else if (value === null) {
         row.errors.push("Amount is not a number.");
       } else if (value === 0n) {

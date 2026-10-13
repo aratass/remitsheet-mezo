@@ -6,6 +6,7 @@ import { renderPay } from "./pay";
 import { renderReceipt, renderReceiptLookup } from "./receipt";
 import { renderDeploy } from "./deploy";
 import { renderAbout } from "./about";
+import { renderRequest } from "./request";
 
 const app = document.getElementById("app")!;
 let unmount: (() => void) | undefined;
@@ -17,6 +18,7 @@ function route(): { name: string; params: URLSearchParams } {
   if (hash === "deploy") return { name: "deploy", params };
   if (hash === "about") return { name: "about", params };
   if (hash === "receipt") return { name: "lookup", params };
+  if (hash === "request") return { name: "request", params };
   return { name: "pay", params };
 }
 
@@ -59,6 +61,7 @@ function renderHeader(current: string) {
         "nav",
         { class: "nav" },
         navLink(base + dev, "Pay", current === "pay"),
+        navLink(`${base}${dev}#/request`, "Request", current === "request"),
         navLink(`${base}${dev}#/receipt`, "Receipts", current === "receipt" || current === "lookup"),
         navLink(`${base}${dev}#/about`, "How it works", current === "about"),
         navLink(`${base}${dev}#/deploy`, "Deploy", current === "deploy"),
@@ -83,7 +86,7 @@ function renderWalletArea() {
         "button",
         { class: "btn btn-warn btn-sm", onclick: () => void switchTo(CHAINS[DEFAULT_CHAIN]).catch(() => undefined) },
         icon("alert"),
-        "Switch to Arc",
+        `Switch to ${CHAINS[DEFAULT_CHAIN].label}`,
       );
   const addressHref = chain ? addressUrl(chain, wallet.account) : undefined;
   clear(
@@ -164,7 +167,7 @@ function renderFooter() {
         { class: "footer-links" },
         extLink(REPO_URL, "Source code"),
         extLink(addressUrl(chain, chain.remitsheet), "Contract"),
-        extLink("https://docs.arc.io", "Arc docs"),
+        extLink("https://mezo.org/docs/developers/", "Mezo docs"),
       ),
     ),
   );
@@ -189,6 +192,9 @@ function render() {
       break;
     case "about":
       unmount = renderAbout(view);
+      break;
+    case "request":
+      unmount = renderRequest(view);
       break;
     default:
       unmount = renderPay(view);
