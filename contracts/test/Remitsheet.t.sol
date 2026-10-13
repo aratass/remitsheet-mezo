@@ -40,21 +40,21 @@ contract RemitsheetTest is Test {
         bytes32 indexed ref, address indexed sender, address indexed token, uint256 total, uint256 count
     );
 
-    /// @dev EIP-7825 (Osaka) per-transaction gas cap. Arc targets the Osaka hard fork.
-    uint256 internal constant TX_GAS_CAP = 16_777_216;
+    /// @dev Block gas limit on Mezo testnet and mainnet: one batch must fit in a single block.
+    uint256 internal constant TX_GAS_CAP = 10_000_000;
     bytes32 internal constant REF = bytes32("Payroll 2026-10");
 
     Remitsheet internal rs;
-    MockERC20 internal eurc;
+    MockERC20 internal musd;
     address internal payer = makeAddr("payer");
 
     function setUp() public {
         rs = new Remitsheet();
-        eurc = new MockERC20("EURC", "EURC", 6);
+        musd = new MockERC20("Mezo USD (mock)", "MUSD", 18);
         vm.deal(payer, 1e30); // enough for any fuzzed batch (60 lines of up to 1e24)
-        eurc.mint(payer, 1e30);
+        musd.mint(payer, 1e30);
         vm.prank(payer);
-        eurc.approve(address(rs), type(uint256).max);
+        musd.approve(address(rs), type(uint256).max);
     }
 
     // ---------------------------------------------------------------- helpers
@@ -224,10 +224,10 @@ contract RemitsheetTest is Test {
     // ---------------------------------------------------------------- native: reentrancy
 
     function test_reentrantRecipientCannotTakeMoreThanItsLine() public {
-        ReentrantRecipient attacker = new ReentrantRecipient(rs, address(eurc));
+        ReentrantRecipient attacker = new ReentrantRecipient(rs, address(musd));
         (address[] memory to, uint256[] memory amounts, uint256 total) = _batch(3, 8, 1 ether);
         to[0] = address(attacker); // paid first, while the rest of the batch is still in the contract
-        uint256 eurcBefore = eurc.balanceOf(payer);
+        uint256 musdBefore = musd.balanceOf(payer);
 
         vm.prank(payer);
         rs.payNative{value: total}(to, amounts, REF);
@@ -238,7 +238,7 @@ contract RemitsheetTest is Test {
         assertEq(address(attacker).balance, amounts[0], "attacker got exactly its line");
         assertEq(to[1].balance, amounts[1]);
         assertEq(to[2].balance, amounts[2]);
-        assertEq(eurc.balanceOf(payer), eurcBefore, "payer tokens untouched");
+        assertEq(musd.balanceOf(payer), musdBefore, "payer tokens untouched");
         assertEq(address(rs).balance, 0);
     }
 
@@ -277,30 +277,30 @@ contract RemitsheetTest is Test {
 
     function test_payToken_paysEveryRecipient() public {
         (address[] memory to, uint256[] memory amounts, uint256 total) = _batch(5, 10, 1e6);
-        uint256 before = eurc.balanceOf(payer);
+        uint256 before = musd.balanceOf(payer);
 
         vm.prank(payer);
-        rs.payToken(address(eurc), to, amounts, REF);
+        rs.payToken(address(musd), to, amounts, REF);
 
         for (uint256 i; i < to.length; ++i) {
-            assertEq(eurc.balanceOf(to[i]), amounts[i]);
+            assertEq(musd.balanceOf(to[i]), amounts[i]);
         }
-        assertEq(eurc.balanceOf(payer), before - total);
-        assertEq(eurc.balanceOf(address(rs)), 0, "contract never holds tokens");
+        assertEq(musd.balanceOf(payer), before - total);
+        assertEq(musd.balanceOf(address(rs)), 0, "contract never holds tokens");
     }
 
     function test_payToken_emitsLineAndBatchEvents() public {
         (address[] memory to, uint256[] memory amounts, uint256 total) = _batch(2, 11, 1e6);
 
         vm.expectEmit(true, true, true, true, address(rs));
-        emit Paid(REF, address(eurc), to[0], amounts[0]);
+        emit Paid(REF, address(musd), to[0], amounts[0]);
         vm.expectEmit(true, true, true, true, address(rs));
-        emit Paid(REF, address(eurc), to[1], amounts[1]);
+        emit Paid(REF, address(musd), to[1], amounts[1]);
         vm.expectEmit(true, true, true, true, address(rs));
-        emit BatchPaid(REF, payer, address(eurc), total, 2);
+        emit BatchPaid(REF, payer, address(musd), total, 2);
 
         vm.prank(payer);
-        rs.payToken(address(eurc), to, amounts, REF);
+        rs.payToken(address(musd), to, amounts, REF);
     }
 
     function test_payToken_rejectsAddressWithoutCode() public {
@@ -314,18 +314,18 @@ contract RemitsheetTest is Test {
     function test_payToken_validation() public {
         vm.startPrank(payer);
         vm.expectRevert(Remitsheet.EmptyBatch.selector);
-        rs.payToken(address(eurc), new address[](0), new uint256[](0), REF);
+        rs.payToken(address(musd), new address[](0), new uint256[](0), REF);
 
         vm.expectRevert(abi.encodeWithSelector(Remitsheet.LengthMismatch.selector, 1, 2));
-        rs.payToken(address(eurc), new address[](1), new uint256[](2), REF);
+        rs.payToken(address(musd), new address[](1), new uint256[](2), REF);
 
         (address[] memory to, uint256[] memory amounts) = _one(address(0), 1);
         vm.expectRevert(abi.encodeWithSelector(Remitsheet.ZeroAddress.selector, 0));
-        rs.payToken(address(eurc), to, amounts, REF);
+        rs.payToken(address(musd), to, amounts, REF);
 
         (to, amounts) = _one(makeAddr("r"), 0);
         vm.expectRevert(abi.encodeWithSelector(Remitsheet.ZeroAmount.selector, 0));
-        rs.payToken(address(eurc), to, amounts, REF);
+        rs.payToken(address(musd), to, amounts, REF);
         vm.stopPrank();
     }
 
@@ -399,8 +399,8 @@ contract RemitsheetTest is Test {
         (address[] memory to, uint256[] memory amounts) = _one(thief, 1e6);
         vm.expectRevert(abi.encodeWithSelector(Remitsheet.TransferFailed.selector, 0, thief));
         vm.prank(thief);
-        rs.payToken(address(eurc), to, amounts, REF);
-        assertEq(eurc.balanceOf(thief), 0);
+        rs.payToken(address(musd), to, amounts, REF);
+        assertEq(musd.balanceOf(thief), 0);
     }
 
     // ---------------------------------------------------------------- fuzz
@@ -446,16 +446,16 @@ contract RemitsheetTest is Test {
             amounts[i] = bound(uint256(keccak256(abi.encode(seed, i, "amt"))), 1, 1e18);
             total += amounts[i];
         }
-        uint256 before = eurc.balanceOf(payer);
+        uint256 before = musd.balanceOf(payer);
 
         vm.prank(payer);
-        rs.payToken(address(eurc), to, amounts, bytes32(seed));
+        rs.payToken(address(musd), to, amounts, bytes32(seed));
 
         for (uint256 i; i < n; ++i) {
-            assertEq(eurc.balanceOf(to[i]), amounts[i]);
+            assertEq(musd.balanceOf(to[i]), amounts[i]);
         }
-        assertEq(eurc.balanceOf(payer), before - total);
-        assertEq(eurc.balanceOf(address(rs)), 0);
+        assertEq(musd.balanceOf(payer), before - total);
+        assertEq(musd.balanceOf(address(rs)), 0);
     }
 
     function testFuzz_lengthMismatchAlwaysReverts(uint8 a, uint8 b) public {
@@ -484,12 +484,12 @@ contract RemitsheetTest is Test {
         (address[] memory to, uint256[] memory amounts,) = _batch(n, fresh ? 300 + n : 400 + n, 1e4);
         if (!fresh) {
             for (uint256 i; i < n; ++i) {
-                eurc.mint(to[i], 1); // recipient already holds the token
+                musd.mint(to[i], 1); // recipient already holds the token
             }
         }
         vm.prank(payer);
         uint256 g = gasleft();
-        rs.payToken(address(eurc), to, amounts, REF);
+        rs.payToken(address(musd), to, amounts, REF);
         used = g - gasleft();
     }
 
@@ -506,7 +506,7 @@ contract RemitsheetTest is Test {
             console.log("  native, existing accounts total / per line", ne, ne / n);
             console.log("  token,  new holders       total / per line", tf, tf / n);
             console.log("  token,  existing holders  total / per line", te, te / n);
-            assertLt(nf, TX_GAS_CAP, "200 new recipients fit in one transaction");
+            assertLt(nf, TX_GAS_CAP, "200 new recipients fit in one Mezo block");
             assertLt(tf, TX_GAS_CAP);
         }
     }

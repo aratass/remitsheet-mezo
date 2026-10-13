@@ -100,7 +100,7 @@ contract ShortReturnToken {
 }
 
 /// @dev Recipient that rejects native value, like a contract without a receive function or a
-///      blocklisted address on Arc.
+///      contract that refuses native BTC on Mezo.
 contract RejectingRecipient {
     receive() external payable {
         revert("no thanks");

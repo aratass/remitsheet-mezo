@@ -2,8 +2,10 @@
 pragma solidity 0.8.30;
 
 /// @title Remitsheet
-/// @notice Pays many recipients in a single transaction, either in the chain's native
-///         currency (USDC on Arc) or in any ERC-20 token (for example EURC).
+/// @notice Pays many recipients in a single transaction, either in the chain's native currency
+///         (BTC on Mezo) or in any ERC-20 token (MUSD, MEZO). Tokens that support EIP-2612
+///         permit (MUSD and the MEZO token both do) can be paid with one signature and one
+///         transaction, without a separate approval transaction.
 ///
 ///         - No owner, no admin functions, no fees, no upgrades.
 ///         - Holds no funds: native value is forwarded within the same call and tokens move
@@ -15,10 +17,9 @@ pragma solidity 0.8.30;
 contract Remitsheet {
     /// @notice One recipient line of a batch.
     /// @param ref    Batch reference chosen by the sender (for example a payroll run or invoice id).
-    /// @param token  Token paid, or address(0) for the native currency (USDC on Arc).
+    /// @param token  Token paid, or address(0) for the native currency (BTC on Mezo).
     /// @param to     Recipient.
-    /// @param amount Amount in the asset's base units (18 decimals for native USDC on Arc,
-    ///               6 decimals for the USDC and EURC ERC-20 contracts).
+    /// @param amount Amount in the asset's base units (18 decimals for BTC, MUSD and MEZO on Mezo).
     event Paid(bytes32 indexed ref, address indexed token, address indexed to, uint256 amount);
 
     /// @notice Summary of a batch, emitted after all of its {Paid} lines.
@@ -41,23 +42,18 @@ contract Remitsheet {
     error TransferFailed(uint256 index, address to);
     /// @notice `token` is not a contract.
     error InvalidToken(address token);
+    /// @notice After the permit call, this contract may still not spend `total` of the caller's
+    ///         tokens: the signature was invalid, expired, for another amount, or already used.
+    error PermitFailed(uint256 total, uint256 allowance);
 
     /// @notice Pays every recipient in the native currency. `msg.value` must equal the sum of `amounts`.
     /// @param to      Recipients.
-    /// @param amounts Amounts in native base units (18 decimals on Arc), same order as `to`.
+    /// @param amounts Amounts in native base units (18 decimals for BTC on Mezo), same order as `to`.
     /// @param ref     Batch reference recorded in the events.
     function payNative(address[] calldata to, uint256[] calldata amounts, bytes32 ref) external payable {
-        uint256 n = _checkLengths(to.length, amounts.length);
-
         // First pass: validate every line and compute the total before any value moves,
         // so a wrong msg.value is reported as ValueMismatch rather than a failed transfer.
-        uint256 total;
-        for (uint256 i; i < n; ++i) {
-            if (to[i] == address(0)) revert ZeroAddress(i);
-            uint256 amount = amounts[i];
-            if (amount == 0) revert ZeroAmount(i);
-            total += amount; // checked arithmetic: an overflowing list reverts
-        }
+        (uint256 n, uint256 total) = _validate(to, amounts);
         if (total != msg.value) revert ValueMismatch(total, msg.value);
 
         // Second pass: transfer. All gas is forwarded so smart-contract wallets can receive,
@@ -78,7 +74,7 @@ contract Remitsheet {
 
     /// @notice Pays every recipient in `token`, moving funds directly from the caller to each
     ///         recipient. The caller must first approve this contract for at least the total.
-    /// @param token   ERC-20 token (for example EURC or the USDC ERC-20 interface on Arc).
+    /// @param token   ERC-20 token (for example MUSD or MEZO).
     /// @param to      Recipients.
     /// @param amounts Amounts in the token's base units, same order as `to`.
     /// @param ref     Batch reference recorded in the events.
@@ -100,10 +96,111 @@ contract Remitsheet {
         emit BatchPaid(ref, msg.sender, token, total, n);
     }
 
+    /// @notice Same as {payToken}, but first sets this contract's allowance with an EIP-2612 permit
+    ///         signed by the caller for exactly the batch total. One signature and one transaction,
+    ///         and no allowance is left over afterwards.
+    /// @dev    The permit call may fail because someone copied the signature from the mempool and
+    ///         submitted it first. That is harmless: the allowance it set is what counts, so the
+    ///         batch only reverts when the allowance is still below the total after the call.
+    ///         Only the caller's own tokens can ever be moved: the permit owner is `msg.sender`.
+    /// @param token    ERC-20 token with EIP-2612 permit (MUSD, MEZO).
+    /// @param to       Recipients.
+    /// @param amounts  Amounts in the token's base units, same order as `to`.
+    /// @param ref      Batch reference recorded in the events.
+    /// @param deadline Permit deadline (unix seconds).
+    /// @param v        Signature recovery byte (27 or 28).
+    /// @param r        Signature r.
+    /// @param s        Signature s.
+    function payTokenWithPermit(
+        address token,
+        address[] calldata to,
+        uint256[] calldata amounts,
+        bytes32 ref,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        if (token.code.length == 0) revert InvalidToken(token);
+        (, uint256 total) = _validate(to, amounts);
+
+        _permit(token, total, deadline, v, r, s);
+        uint256 allowed = _allowance(token, msg.sender);
+        if (allowed < total) revert PermitFailed(total, allowed);
+
+        _transferAll(token, to, amounts, ref, total);
+    }
+
+    /// @dev Second pass of {payTokenWithPermit}: the lines were validated and the total computed.
+    function _transferAll(
+        address token,
+        address[] calldata to,
+        uint256[] calldata amounts,
+        bytes32 ref,
+        uint256 total
+    ) private {
+        uint256 n = to.length;
+        for (uint256 i; i < n; ++i) {
+            address recipient = to[i];
+            uint256 amount = amounts[i];
+            if (!_transferFrom(token, msg.sender, recipient, amount)) revert TransferFailed(i, recipient);
+            emit Paid(ref, token, recipient, amount);
+        }
+        emit BatchPaid(ref, msg.sender, token, total, n);
+    }
+
     function _checkLengths(uint256 recipients, uint256 amounts) private pure returns (uint256) {
         if (recipients != amounts) revert LengthMismatch(recipients, amounts);
         if (recipients == 0) revert EmptyBatch();
         return recipients;
+    }
+
+    /// @dev Checks lengths, rejects zero recipients and zero amounts, and returns the line count and
+    ///      the total (checked arithmetic: an overflowing list reverts).
+    function _validate(address[] calldata to, uint256[] calldata amounts)
+        private
+        pure
+        returns (uint256 n, uint256 total)
+    {
+        n = _checkLengths(to.length, amounts.length);
+        for (uint256 i; i < n; ++i) {
+            if (to[i] == address(0)) revert ZeroAddress(i);
+            uint256 amount = amounts[i];
+            if (amount == 0) revert ZeroAmount(i);
+            total += amount;
+        }
+    }
+
+    /// @dev Calls `token.permit(msg.sender, this, value, deadline, v, r, s)` and ignores the outcome
+    ///      (see {payTokenWithPermit}). Works for permit functions that return nothing (OpenZeppelin)
+    ///      and for those that return a bool (Mezo's precompiled tokens). Return data is not copied.
+    function _permit(address token, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) private {
+        assembly ("memory-safe") {
+            let p := mload(0x40)
+            mstore(p, shl(224, 0xd505accf)) // permit(address,address,uint256,uint256,uint8,bytes32,bytes32)
+            mstore(add(p, 0x04), caller())
+            mstore(add(p, 0x24), address())
+            mstore(add(p, 0x44), value)
+            mstore(add(p, 0x64), deadline)
+            mstore(add(p, 0x84), and(v, 0xff))
+            mstore(add(p, 0xa4), r)
+            mstore(add(p, 0xc4), s)
+            pop(call(gas(), token, 0, p, 0xe4, 0, 0))
+        }
+    }
+
+    /// @dev Reads `token.allowance(owner, this)`. A token that reverts or answers with malformed data
+    ///      counts as zero allowance.
+    function _allowance(address token, address owner) private view returns (uint256 allowed) {
+        assembly ("memory-safe") {
+            let p := mload(0x40)
+            mstore(p, shl(224, 0xdd62ed3e)) // allowance(address,address)
+            mstore(add(p, 0x04), owner)
+            mstore(add(p, 0x24), address())
+            mstore(0x00, 0)
+            let ok := staticcall(gas(), token, p, 0x44, 0x00, 0x20)
+            if and(ok, gt(returndatasize(), 0x1f)) { allowed := mload(0x00) }
+        }
     }
 
     /// @dev Calls `token.transferFrom(from, to, amount)` and reports success. Accepts tokens that

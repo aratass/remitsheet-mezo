@@ -3,13 +3,13 @@
   "compiler": "solc 0.8.30",
   "settings": {
     "optimizerRuns": 20000,
-    "evmVersion": "prague",
+    "evmVersion": "cancun",
     "bytecodeHash": "none",
     "appendCBOR": false
   },
   "create2Factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
-  "salt": "0x52656d6974736865657420763100000000000000000000000000000000000000",
-  "initCodeHash": "0x3c09f2dfa9c31c465cbdc5e5b2973cf1f0e59a6ebb3e04975c0781e78a6123e1",
-  "runtimeCodeHash": "0x65ce152c8eed11f8ac895bc9ddada831ba1cdd7f90d3c2ee3bc864ef51487a4e",
-  "address": "0x015153204C9A1cBAefB959782490db74cD1a7DF5"
+  "salt": "0x52656d6974736865657420763200000000000000000000000000000000000000",
+  "initCodeHash": "0xf528171011214b069c38154a02ddfaa60a7e46b9754f2050f7bb7496eabd7287",
+  "runtimeCodeHash": "0x8d13bfad6e18eae985196b5a950cbbf6a473069c0eb5d10d92d4eb7c739028db",
+  "address": "0xfB87f0a4df8Fa0FBBe505BF4Af27aEEebEafA570"
 }

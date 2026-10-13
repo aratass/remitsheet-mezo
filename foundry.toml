@@ -5,7 +5,7 @@ out = "contracts/out"
 cache_path = "contracts/cache"
 libs = ["lib"]
 solc_version = "0.8.30"
-evm_version = "prague"
+evm_version = "cancun"
 optimizer = true
 optimizer_runs = 20000
 # Deterministic bytecode: no metadata hash or CBOR suffix, so the CREATE2 address
