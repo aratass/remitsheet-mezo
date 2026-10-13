@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Remitsheet">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1e3a8a"/>
-      <stop offset="1" stop-color="#2563eb"/>
+      <stop offset="0" stop-color="#9a3412"/>
+      <stop offset="1" stop-color="#ea580c"/>
     </linearGradient>
   </defs>
   <rect width="64" height="64" rx="14" fill="url(#g)"/>
@@ -11,7 +11,7 @@
     <path d="M14 32h17"/>
     <path d="M14 44h12"/>
   </g>
-  <g fill="#5eead4">
+  <g fill="#fde68a">
     <circle cx="46" cy="20" r="5"/>
     <circle cx="41" cy="32" r="5"/>
     <circle cx="36" cy="44" r="5"/>

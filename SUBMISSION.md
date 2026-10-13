@@ -1,121 +1,85 @@
-# DoraHacks BUIDL submission: Arc Microgrants
+# AKINDO submission: Mezo Buildathon, Wave 1
 
-Copy each field into the BUIDL form at https://dorahacks.io/hackathon/arc-microgrants (button "Submit BUIDL"). Replace every `«…»` placeholder first; the owner steps say where each value comes from.
+Wave 1 build period: 16 to 26 Oct 2026, deadline **26 Oct 2026, 15:00 UTC** (17:00 in Vilnius). Program page: https://app.akindo.io/wave-hacks/OVOO0gdrVU8379D10
 
-## Program checklist (from the published rules)
+Copy each field into the AKINDO submission form. Replace every `«…»` placeholder first (HIS-STEPS.md says where each value comes from).
 
-| Rule | How Remitsheet meets it |
+## Requirement checklist (from the program page)
+
+| Requirement | How Remitsheet meets it |
 |---|---|
-| "Projects must be deployed and functional on the Arc Mainnet" | Contract deployed on Arc mainnet (chain 5042) and a real batch paid on mainnet (`«MAINNET_RECEIPT_URL»`) |
-| "The project must have a genuine Arc component" | Native USDC gas and payouts, EURC on Arc, Arc network config, Arc-specific decimals and blocklist handling |
-| "a deployable link and a public code repository" | `https://aratass.github.io/remitsheet/` and `https://github.com/aratass/remitsheet` |
-| "Each project can have only one submission" | One BUIDL |
-| "Applicants must have a compatible wallet to receive USDC on Arc" | Payout address `«ARC_WALLET_ADDRESS»` |
-| "Projects already funded through a Circle or Arc program are not eligible" | Not funded by any program |
+| Integrates MUSD and/or MEZO | Both. MUSD is the main payout asset (EIP-2612 permit, valued at 1 USD), MEZO is paid through its precompile permit, and the app reads Mezo Borrow live for MUSD payouts |
+| Working deployment on Mezo, Ethereum, Base or BNB Chain (Mezo testnet accepted) | Contract `0xfB87f0a4df8Fa0FBBe505BF4Af27aEEebEafA570` on Mezo testnet, first batch: «TESTNET_RECEIPT_URL» |
+| Developed during the hackathon, or a new extension of an existing product | Extension of Remitsheet (open source, first built for Arc: https://aratass.github.io/remitsheet/). The Mezo edition, permit flow, Mezo Borrow credit line, MEZO and BTC payouts, PriceFeed valuation and request links are new |
+| Extends MUSD or MEZO utility | Gives MUSD a payroll and invoice use case, sends short users to Mezo Borrow, and turns every request link into a new MUSD payer |
+| Testnet or mainnet link to the live project | https://aratass.github.io/remitsheet-mezo/ |
+| Public GitHub repository | https://github.com/aratass/remitsheet-mezo |
+| Project deck | https://github.com/aratass/remitsheet-mezo/blob/main/submission/deck.pdf |
+| 2-minute pitch video | «PITCH_VIDEO_URL» (file: https://github.com/aratass/remitsheet-mezo/blob/main/submission/pitch-video.mp4, 1 min 55 s) |
 
 ## Form fields
 
-**BUIDL name**
-Remitsheet
+**Project name**
+Remitsheet for Mezo
 
-**Tagline** (96 characters)
-Pay a whole spreadsheet in USDC or EURC with one Arc transaction, with receipts and EUR exports.
+**Project category** (3 to 5 words)
+Payroll and batch payment systems
 
-**Logo**
-`submission/logo-512.png` (512 × 512)
+**TL;DR** (one sentence)
+Remitsheet pays a whole spreadsheet of contractors, grantees or employees in MUSD, MEZO or BTC with one permit signature and one Mezo transaction, shows your Mezo Borrow loan while you do it, and gives you receipts and a USD and EUR accounting export.
 
-**Cover / banner image**
-`submission/cover-1280x720.png` (1280 × 720)
+**How it works** (problem, how it functions, how MUSD and MEZO are used)
 
-**Category / tags**
-Payments, Stablecoins, Payroll, Developer tools, USDC, EURC, Arc
+*Problem.* Teams that pay many people on-chain (contractors, bounty and grant winners, DAO contributors, payroll) send dozens of transfers one by one, approve each token separately and often leave unlimited approvals behind, then rebuild the paperwork by hand for their accountant. Teams whose treasury is Bitcoin usually sell BTC to pay in dollars.
+
+*How it works.*
+1. Paste or upload a sheet (`address, amount, label`) or collect lines from payment request links. Every line is checked before anything moves: checksums, duplicates, zero amounts, decimals, and addresses that are token, oracle or Mezo Borrow contracts.
+2. For MUSD and MEZO you sign one EIP-2612 permit for exactly the batch total (free, valid 30 minutes) and confirm one transaction: `payTokenWithPermit` moves the tokens from your wallet straight to every recipient. No separate approval, nothing left approved, and the batch is all-or-nothing. BTC batches are a single `payNative` transaction.
+3. Before you sign, the batch is simulated and any recipient that would reject the payment is highlighted.
+4. Afterwards you get a receipt rebuilt from the chain (printable as PDF), a payment advice link per recipient, and a CSV with USD and EUR values for each line.
+
+*How MUSD and MEZO are used.*
+- **MUSD** is the main payout asset. The app verifies MUSD's EIP-712 domain ("Mezo USD", version 1) against `DOMAIN_SEPARATOR()` before asking for a signature, and values MUSD at 1 USD in the export.
+- **Mezo Borrow:** for MUSD batches the app reads your trove live from `TroveManager`, the BTC price from Mezo's `PriceFeed` and the fee from `BorrowerOperations`. It shows collateral, debt, loan-to-value, how much you could still borrow up to 50% loan-to-value and, when the batch is short, exactly how borrowing the missing MUSD would move your loan-to-value (fee included), with a button to Mezo Borrow. Bitcoin holders pay their team in dollars without selling BTC.
+- **MEZO** is paid through Mezo's precompiled token, whose permit returns a bool and only accepts v = 27 or 28; the contract handles both permit styles, so grant programs can pay many winners in MEZO with one signature.
+- **BTC** lines and the network fee are valued at the BTC/USD price Mezo's `PriceFeed` reported at the payment block.
+- **Payment request links** let a contractor send an address, amount, asset and note as one link; the payer collects them into one batch. Each link brings a new payer to MUSD on Mezo.
+
+The contract has no owner, fees, upgrades or custody, is deployed through the CREATE2 factory at the same address on Mezo testnet and mainnet, and is covered by 49 Foundry tests (unit, fuzz, permit, reentrancy, failing tokens), 27 unit tests and a 44-check end-to-end browser test.
+
+**Target group**
+Track 2 (Access and Distribution): small Bitcoin-holding companies, studios and DAOs that pay contractors in dollars; grant, bounty and ecosystem programs that pay many winners in MEZO or MUSD; and freelancers who would rather send a request link than an address in a chat. Experience level: anyone who can export a spreadsheet and use a browser wallet. Region: worldwide (EUR export for European bookkeeping). Desktop web, any EIP-6963 wallet (Rabby, MetaMask).
+
+**Tech stack**
+Solidity 0.8.30 with Foundry (forge, anvil); TypeScript and viem with no framework, bundled with esbuild; Playwright for end-to-end tests; GitHub Pages hosting. Standards: EIP-2612 permits, EIP-712, EIP-6963 wallet discovery, CREATE2 deterministic deployment. Mezo contracts used: MUSD, MEZO precompile, TroveManager, PriceFeed, BorrowerOperations.
+
+**Track**
+Track 2: Access and Distribution for MUSD/MEZO
+
+**Chain deployed on**
+Mezo (testnet, chain 31611). The same contract address works on Mezo mainnet once deployed.
+
+**Project status**
+Existing project with new features added during the hackathon. Existing product: Remitsheet for Arc, https://aratass.github.io/remitsheet/ (source: https://github.com/aratass/remitsheet). New for Mezo: the Mezo edition with MUSD, MEZO and BTC payouts, one-signature permit batches (new contract function `payTokenWithPermit`), the Mezo Borrow credit line, PriceFeed valuation and payment request links.
+
+**Project readiness**
+Testnet deployment.
+
+**Future milestones**
+1. **Wave 2, by 15 Nov 2026:** borrow and pay in one transaction using Mezo's `BorrowerOperationsSignatures.withdrawMUSDWithSignature` (the borrower signs once and the borrowed MUSD goes straight to the payees), Mezo Passport so Bitcoin wallets can pay, and a mainnet deployment.
+2. **December 2026:** recurring payroll schedules, Safe multisig approvals and saved recipient lists.
+3. **Q1 2027:** accounting connectors and invoice import, and a hosted team plan.
+
+**Team info**
+Arminas Attas, solo builder (product, smart contracts, front end). GitHub: https://github.com/aratass «X_OR_LINKEDIN_URL_IF_ANY». Telegram: @Herbzzz.
 
 **Links**
-- Live app: https://aratass.github.io/remitsheet/
-- GitHub: https://github.com/aratass/remitsheet
-- Contract on Arc mainnet: https://explorer.arc.io/address/0x015153204C9A1cBAefB959782490db74cD1a7DF5
-- Example mainnet receipt: «MAINNET_RECEIPT_URL» (the app link `https://aratass.github.io/remitsheet/?tx=0x…&chain=5042`)
-- Deployment transaction: «DEPLOY_TX_EXPLORER_URL»
+- Live app (Mezo testnet): https://aratass.github.io/remitsheet-mezo/
+- GitHub: https://github.com/aratass/remitsheet-mezo
+- Contract on Mezo testnet: https://explorer.test.mezo.org/address/0xfB87f0a4df8Fa0FBBe505BF4Af27aEEebEafA570
+- First testnet batch receipt: «TESTNET_RECEIPT_URL»
+- Deck: https://github.com/aratass/remitsheet-mezo/blob/main/submission/deck.pdf
+- Pitch video: «PITCH_VIDEO_URL»
 
-**Team**
-Solo: Arminas Attas, software and data engineer.
-
-**Payout wallet (USDC on Arc)**
-«ARC_WALLET_ADDRESS»
-
-**Is this project new?**
-Yes, built for this program in October 2026. It has not received funding from Circle, Arc or any other program.
-
-### Description (about 520 words)
-
-Paying many people is still a chore in crypto. Teams that pay contractors, bounty winners, grant tranches or a monthly payroll in stablecoins end up sending dozens of transfers one by one. Then they rebuild the paperwork by hand, because a wallet history is not something an accountant can book.
-
-Remitsheet turns that into three steps.
-
-**1. Paste the sheet.** Export the payout tab of your spreadsheet (`address, amount, label`) and paste or upload it. Every line is checked before anything can be sent:
-- address format and EIP-55 checksum, and the zero address;
-- duplicate recipients, zero or negative amounts, and more than six decimals;
-- amounts silently split by an unquoted thousands separator;
-- addresses that are token or system contracts rather than people.
-
-The batch is then simulated. If any recipient would reject the payment, the failing line is highlighted and the Pay button stays disabled.
-
-**2. Pay in one transaction.** On Arc, USDC is the native currency, so a USDC batch is a single wallet confirmation: up to 300 recipients, final as soon as it is included. EURC, Circle's euro stablecoin on Arc, is paid through its token contract: one approval of the exact total, then one batch. Either every line is paid or nothing moves. The contract has no owner, no fees and no upgrade path, and it never holds funds between transactions.
-
-**3. Keep the paperwork.** Every batch gets a receipt page rebuilt from the chain, so anyone with the link can verify it. It prints cleanly to PDF. Each recipient can be sent a payment advice link that shows only their own line. One click exports an accounting CSV: date and time in UTC, transaction hash, reference, recipient, label, amount, and the EUR value at the European Central Bank reference rate for that day, with the rate and its source in every row. Labels never go on-chain.
-
-**Why Arc.**
-- Gas is paid in USDC, so the payer needs nothing but the dollars being paid out. A 200-line batch costs about 0.05 to 0.15 USDC at the 20 gwei minimum base fee.
-- Finality on inclusion means a receipt is a settled payment.
-- Native EURC makes euro payroll and the EUR export natural for European teams.
-
-Remitsheet handles Arc's specifics:
-- 18-decimal native USDC versus the 6-decimal ERC-20 interface;
-- reverts on blocklisted addresses and on the zero address, caught in simulation;
-- network setup in the wallet.
-
-**Trust and openness.** The contract is about 70 lines of Solidity with no dependencies. It has 32 Foundry tests: unit, fuzz at 10,000 runs, reentrancy by recipients and by tokens, tokens that return false or nothing, a return-data bomb, and gas for 200 recipients. It is deployed through the standard CREATE2 factory, so it has the same address on every chain. The app checks the code hash before trusting an address or a receipt.
-
-The web app is static, with no backend, no accounts and no tracking, and it is tested end to end with Playwright against a local node. The code is MIT licensed.
-
-**What's next:**
-- EIP-2612 permit for single-signature EURC batches;
-- Safe multisig proposals;
-- recurring payroll templates;
-- export presets for common accounting tools.
-
-### How it uses Arc (short field, if asked)
-
-- Contract: Remitsheet is deployed on Arc mainnet at `0x015153204C9A1cBAefB959782490db74cD1a7DF5`.
-- USDC batches use native USDC (18 decimals) via `payNative`, in one transaction, with gas also paid in USDC.
-- EURC batches use EURC on Arc (`0xbEf5…21c1`) via `payToken`.
-- The app adds Arc mainnet (chain 5042) to the wallet, reads receipts from Arc's public RPC, and links every line to explorer.arc.io.
-
-### Tech stack
-
-- **Contract:** Solidity 0.8.30, tested with Foundry (forge, anvil).
-- **Web app:** TypeScript, viem, plain DOM with no framework, bundled with esbuild, hosted on GitHub Pages.
-- **Wallets:** EIP-6963 wallet discovery (Rabby, MetaMask).
-- **Tests and data:** Playwright end-to-end tests against Anvil. ECB reference rates via Frankfurter, with the ECB Data Portal as a fallback.
-
-### Demo video (if the form has a video field)
-
-`submission/demo-local-chain.mp4`: 58 seconds, captioned, 1280 × 800. It shows deploy, validation, a 5-recipient USDC batch, the receipt, the CSV export, a payment advice, an EURC batch and a failing recipient caught before signing.
-- It was recorded on a local test chain, and its first caption says so.
-- The form usually wants a link, so upload it to YouTube as **Unlisted** and paste the link.
-
-### Screenshots to upload (1280 × 800)
-
-Taken by the end-to-end test on a local test chain; the network badge in them reads "Local test chain".
-
-1. `submission/screenshots/04-review.png`: sheet checked, fee estimate, ready to pay
-2. `submission/screenshots/03-validation.png`: line-by-line validation
-3. `submission/screenshots/05-paid.png`: one transaction, every line paid
-4. `submission/screenshots/06-receipt.png`: receipt rebuilt from the chain
-5. `submission/screenshots/09-failing-line.png`: a recipient that would reject the payment is caught before sending
-6. `submission/screenshots/08-eurc-receipt.png`: EURC batch
-7. `submission/screenshots/01-deploy.png`: one-click deterministic deployment
-
-Also available: `submission/receipt-example.pdf` (printed receipt), `submission/accounting-example.csv` (export).
-
-If there is time after the mainnet batch, a screenshot of the real mainnet receipt page is the strongest first image.
+**Wallet for the MEZO reward** (asked during KYB, not on the form)
+«MEZO_PAYOUT_ADDRESS» (your Rabby main address works: it receives MEZO on Mezo mainnet)
