@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decodeRef, encodeRef, escapeCsv, formatAmount, parseDecimal, plainAmount } from "../src/format";
+import { decodeRef, encodeRef, escapeCsv, formatAmount, formatSats, parseDecimal, plainAmount } from "../src/format";
 import { centsToString, eurAtParCents, eurPerUsd, usdToEurCents } from "../src/fx";
 
 test("parseDecimal", () => {
@@ -36,11 +36,20 @@ test("CSV escaping quotes and neutralises formulas", () => {
 });
 
 test("USD to EUR at the ECB reference rate", () => {
-  // 1200 USDC (18 decimals) at 1.1206 USD per EUR = 1070.8549... EUR
+  // 1200 MUSD (18 decimals, valued at 1 USD) at 1.1206 USD per EUR = 1070.8549... EUR
   assert.equal(centsToString(usdToEurCents(1200n * 10n ** 18n, 18, "1.1206")), "1070.85");
   // 6-decimal amount, half-up rounding: 1 USD / 1.1206 = 0.89238 EUR -> 0.89
   assert.equal(centsToString(usdToEurCents(1_000000n, 6, "1.1206")), "0.89");
   assert.equal(eurPerUsd("1.1206"), "0.892379");
   assert.equal(centsToString(eurAtParCents(275_400000n, 6)), "275.40");
   assert.equal(centsToString(eurAtParCents(5_000n, 6)), "0.01"); // 0.005 rounds half up
+});
+
+test("network fees in satoshis", () => {
+  const sat = 10n ** 10n; // 1 satoshi in 18-decimal BTC units
+  assert.equal(formatSats(0n), "0 sats");
+  assert.equal(formatSats(146n * 1_000_000n), "< 1 sat"); // a testnet batch: 146 wei per gas
+  assert.equal(formatSats(sat), "1 sat");
+  assert.equal(formatSats(146n * sat + sat / 2n), "147 sats"); // rounds half up
+  assert.equal(formatSats(12_345n * sat), "12,345 sats");
 });
