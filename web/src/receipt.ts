@@ -91,6 +91,19 @@ export async function loadReceipt(chain: ChainConfig, hash: Hex): Promise<Receip
     batches[0].lines.forEach((l, i) => (l.label = saved[i] ?? ""));
   }
 
+  // Some Mezo RPC nodes leave effectiveGasPrice out of receipts (seen on Mezo testnet for legacy transactions).
+  // Rebuild it from the transaction: its gas price, or for EIP-1559 transactions base fee + tip, capped at maxFeePerGas.
+  let gasPrice = receipt.effectiveGasPrice as bigint | null | undefined;
+  if (typeof gasPrice !== "bigint") {
+    const tx = await pc.getTransaction({ hash });
+    if (typeof tx.maxFeePerGas === "bigint") {
+      const candidate = (block.baseFeePerGas ?? 0n) + (tx.maxPriorityFeePerGas ?? 0n);
+      gasPrice = candidate < tx.maxFeePerGas ? candidate : tx.maxFeePerGas;
+    } else {
+      gasPrice = tx.gasPrice ?? 0n;
+    }
+  }
+
   return {
     chain,
     hash,
@@ -98,7 +111,7 @@ export async function loadReceipt(chain: ChainConfig, hash: Hex): Promise<Receip
     blockNumber: receipt.blockNumber,
     timestamp: Number(block.timestamp),
     from: getAddress(receipt.from),
-    fee: receipt.gasUsed * receipt.effectiveGasPrice,
+    fee: receipt.gasUsed * gasPrice,
     batches,
     ignoredEmitters: ignored,
   };
