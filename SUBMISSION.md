@@ -2,20 +2,20 @@
 
 Wave 1 build period: 16 to 26 Oct 2026, deadline **26 Oct 2026, 15:00 UTC** (17:00 in Vilnius). Program page: https://app.akindo.io/wave-hacks/OVOO0gdrVU8379D10
 
-Copy each field into the AKINDO submission form. Replace every `«…»` placeholder first (HIS-STEPS.md says where each value comes from).
+Copy each field into the AKINDO submission form.
 
 ## Requirement checklist (from the program page)
 
 | Requirement | How Remitsheet meets it |
 |---|---|
 | Integrates MUSD and/or MEZO | Both. MUSD is the main payout asset (EIP-2612 permit, valued at 1 USD), MEZO is paid through its precompile permit, and the app reads Mezo Borrow live for MUSD payouts |
-| Working deployment on Mezo, Ethereum, Base or BNB Chain (Mezo testnet accepted) | Contract `0xfB87f0a4df8Fa0FBBe505BF4Af27aEEebEafA570` on Mezo testnet, first batch: «TESTNET_RECEIPT_URL» |
+| Working deployment on Mezo, Ethereum, Base or BNB Chain (Mezo testnet accepted) | Contract `0xfB87f0a4df8Fa0FBBe505BF4Af27aEEebEafA570` on Mezo testnet, first batch: https://aratass.github.io/remitsheet-mezo/?tx=0x975ddf141a418aa2ad5b6afcdd1df3e56436f71c0c4716b16c3ef53827c90c00&chain=31611 |
 | Developed during the hackathon, or a new extension of an existing product | Extension of Remitsheet (open source, first built for Arc: https://aratass.github.io/remitsheet/). The Mezo edition, permit flow, Mezo Borrow credit line, MEZO and BTC payouts, PriceFeed valuation and request links are new |
 | Extends MUSD or MEZO utility | Gives MUSD a payroll and invoice use case, sends short users to Mezo Borrow, and turns every request link into a new MUSD payer |
 | Testnet or mainnet link to the live project | https://aratass.github.io/remitsheet-mezo/ |
 | Public GitHub repository | https://github.com/aratass/remitsheet-mezo |
 | Project deck | https://github.com/aratass/remitsheet-mezo/blob/main/submission/deck.pdf |
-| 2-minute pitch video | «PITCH_VIDEO_URL» (file: https://github.com/aratass/remitsheet-mezo/blob/main/submission/pitch-video.mp4, 1 min 58 s) |
+| 2-minute pitch video | https://youtu.be/z6fge0EdHK8 (file: https://github.com/aratass/remitsheet-mezo/blob/main/submission/pitch-video.mp4, 1 min 58 s) |
 
 ## Form fields
 
@@ -71,15 +71,15 @@ Testnet deployment.
 3. **Q1 2027:** accounting connectors and invoice import, and a hosted team plan.
 
 **Team info**
-Arminas Attas, solo builder (product, smart contracts, front end). GitHub: https://github.com/aratass «X_OR_LINKEDIN_URL_IF_ANY». Telegram: @Herbzzz.
+Arminas Attas, solo builder (product, smart contracts, front end). GitHub: https://github.com/aratass. Telegram: @Herbzzz.
 
 **Links**
 - Live app (Mezo testnet): https://aratass.github.io/remitsheet-mezo/
 - GitHub: https://github.com/aratass/remitsheet-mezo
 - Contract on Mezo testnet: https://explorer.test.mezo.org/address/0xfB87f0a4df8Fa0FBBe505BF4Af27aEEebEafA570
-- First testnet batch receipt: «TESTNET_RECEIPT_URL»
+- First testnet batch receipt: https://aratass.github.io/remitsheet-mezo/?tx=0x975ddf141a418aa2ad5b6afcdd1df3e56436f71c0c4716b16c3ef53827c90c00&chain=31611
 - Deck: https://github.com/aratass/remitsheet-mezo/blob/main/submission/deck.pdf
-- Pitch video: «PITCH_VIDEO_URL»
+- Pitch video: https://youtu.be/z6fge0EdHK8
 
 **Wallet for the MEZO reward** (asked during KYB, not on the form)
-«MEZO_PAYOUT_ADDRESS» (your Rabby main address works: it receives MEZO on Mezo mainnet)
+Given privately during KYB.
